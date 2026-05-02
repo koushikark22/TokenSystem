@@ -1,5 +1,4 @@
 import base64
-import html
 import json
 from pathlib import Path
 
@@ -28,7 +27,8 @@ def load_json(path: Path, default):
 def health(url: str):
     try:
         r = requests.get(f"{url}/health", timeout=2)
-        return r.ok, r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+        is_json = r.headers.get("content-type", "").startswith("application/json")
+        return r.ok, r.json() if is_json else {}
     except Exception as e:
         return False, {"error": str(e)}
 
@@ -47,8 +47,8 @@ def decode_jwt_payload(token: str):
 
 
 def display_value(value):
-    if value is None:
-        return ""
+    if value is None or value == "":
+        return "—"
     if isinstance(value, list):
         return ", ".join(str(v) for v in value)
     if isinstance(value, dict):
@@ -56,366 +56,308 @@ def display_value(value):
     return str(value)
 
 
-def short_text(value: str, max_len: int = 22) -> str:
-    text = str(value or "unknown")
-    if len(text) <= max_len:
-        return text
-    return f"{text[: max_len - 3]}..."
+def status_icon(value: str) -> str:
+    low = str(value or "").lower()
+    if any(k in low for k in ["healthy", "active", "allow", "allowed", "low", "online", "ok"]):
+        return "🟢"
+    if any(k in low for k in ["step", "pending", "medium", "warning"]):
+        return "🟡"
+    if any(k in low for k in ["error", "blocked", "high", "fail", "deny", "offline"]):
+        return "🔴"
+    return "⚪"
 
 
-def badge(value: str):
-    raw_text = str(value or "unknown")
-    safe_text = html.escape(raw_text)
-    low = raw_text.lower()
-    if any(k in low for k in ["ok", "active", "allow", "allowed", "healthy", "green"]):
-        css_class = "badge badge-green"
-    elif any(k in low for k in ["step_up", "step-up", "pending", "mfa"]):
-        css_class = "badge badge-yellow"
-    else:
-        css_class = "badge badge-red"
-    return f"<span class='{css_class}'>{safe_text}</span>"
+def event_name(event: dict) -> str:
+    return str(event.get("event_type") or event.get("event") or "unknown")
 
 
-def status_card(title: str, value: str, status: str, detail: str = ""):
-    return f"""
-    <div class='status-card'>
-        <div class='status-title'>{html.escape(title)}</div>
-        <div class='status-value' title='{html.escape(str(value))}'>{html.escape(short_text(value, 18))}</div>
-        <div>{badge(status)}</div>
-        <div class='status-detail'>{html.escape(detail)}</div>
-    </div>
-    """
+def claim_rows(claims: dict) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"claim": "sub", "meaning": "Subject identity", "value": display_value(claims.get("sub"))},
+            {"claim": "actor_type", "meaning": "Human vs agent", "value": display_value(claims.get("actor_type"))},
+            {"claim": "device_id", "meaning": "Endpoint/device context", "value": display_value(claims.get("device_id"))},
+            {"claim": "agent_id", "meaning": "Non-human identity", "value": display_value(claims.get("agent_id"))},
+            {"claim": "scope", "meaning": "Least-privilege permission", "value": display_value(claims.get("scope"))},
+            {"claim": "aud", "meaning": "Target API/resource", "value": display_value(claims.get("aud"))},
+            {"claim": "cnf", "meaning": "Certificate-bound proof", "value": display_value(claims.get("cnf"))},
+            {"claim": "auth_strength", "meaning": "MFA/step-up strength", "value": display_value(claims.get("auth_strength"))},
+            {"claim": "pim", "meaning": "Privileged activation", "value": display_value(claims.get("pim"))},
+            {"claim": "approval_id", "meaning": "Step-up approval evidence", "value": display_value(claims.get("approval_id"))},
+            {"claim": "exp", "meaning": "Token expiry epoch", "value": display_value(claims.get("exp"))},
+            {"claim": "jti", "meaning": "Unique token ID", "value": display_value(claims.get("jti"))},
+        ]
+    )
 
 
-def flow_step(label: str, detail: str):
-    return f"""
-    <div class='flow-step'>
-        <div class='flow-label'>{html.escape(label)}</div>
-        <div class='flow-detail'>{html.escape(detail)}</div>
-    </div>
-    """
-
-
-def render_claim_summary(claims: dict):
-    rows = [
-        {"Claim": "sub", "Meaning": "Human or subject identity", "Value": display_value(claims.get("sub"))},
-        {"Claim": "actor_type", "Meaning": "Human vs agent actor", "Value": display_value(claims.get("actor_type"))},
-        {"Claim": "device_id", "Meaning": "Linux endpoint/device context", "Value": display_value(claims.get("device_id"))},
-        {"Claim": "agent_id", "Meaning": "Non-human identity", "Value": display_value(claims.get("agent_id"))},
-        {"Claim": "scope", "Meaning": "Least-privilege permission", "Value": display_value(claims.get("scope"))},
-        {"Claim": "aud", "Meaning": "Target API/resource", "Value": display_value(claims.get("aud"))},
-        {"Claim": "cnf", "Meaning": "Certificate-bound proof", "Value": display_value(claims.get("cnf"))},
-        {"Claim": "auth_strength", "Meaning": "MFA/step-up strength", "Value": display_value(claims.get("auth_strength"))},
-        {"Claim": "pim", "Meaning": "Privileged activation", "Value": display_value(claims.get("pim"))},
-        {"Claim": "approval_id", "Meaning": "Step-up approval evidence", "Value": display_value(claims.get("approval_id"))},
-    ]
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-
-st.set_page_config(page_title="Centralized Token Service Demo", page_icon="🔐", layout="wide")
+st.set_page_config(
+    page_title="Token Service — Security Demo",
+    page_icon="🔐",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 st.markdown(
     """
-    <style>
-        .block-container {padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1500px;}
-        #MainMenu {visibility: hidden;}
-        footer {visibility: hidden;}
-        .hero {
-            padding: 1.35rem 1.5rem;
-            border-radius: 18px;
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 54%, #14532d 100%);
-            color: white;
-            margin-bottom: 1.15rem;
-            box-shadow: 0 14px 32px rgba(15, 23, 42, 0.18);
-        }
-        .hero-title {font-size: 2rem; font-weight: 760; letter-spacing: -0.02em; margin-bottom: 0.25rem;}
-        .hero-subtitle {font-size: 1rem; opacity: 0.92; max-width: 1080px;}
-        .hero-pills {margin-top: 0.85rem; display: flex; gap: 0.45rem; flex-wrap: wrap;}
-        .hero-pill {
-            border: 1px solid rgba(255,255,255,0.22);
-            border-radius: 999px;
-            padding: 0.25rem 0.7rem;
-            background: rgba(255,255,255,0.10);
-            font-size: 0.82rem;
-        }
-        .status-grid {display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0.8rem; margin: 0.9rem 0 1.15rem 0;}
-        .status-card {
-            background: #ffffff;
-            border: 1px solid #e5e7eb;
-            border-radius: 16px;
-            padding: 0.95rem 0.95rem 0.8rem 0.95rem;
-            min-height: 132px;
-            box-shadow: 0 7px 18px rgba(15, 23, 42, 0.06);
-        }
-        .status-title {font-size: 0.78rem; text-transform: uppercase; color: #64748b; letter-spacing: 0.055em; font-weight: 700;}
-        .status-value {font-size: 1.42rem; font-weight: 760; margin: 0.28rem 0 0.52rem 0; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
-        .status-detail {font-size: 0.76rem; color: #64748b; margin-top: 0.45rem; min-height: 1rem;}
-        .badge {padding: 0.22rem 0.62rem; border-radius: 999px; font-size: 0.78rem; font-weight: 700; display: inline-block;}
-        .badge-green {background: #dcfce7; color: #166534; border: 1px solid #bbf7d0;}
-        .badge-yellow {background: #fef3c7; color: #92400e; border: 1px solid #fde68a;}
-        .badge-red {background: #fee2e2; color: #991b1b; border: 1px solid #fecaca;}
-        .section-card {
-            border: 1px solid #e5e7eb;
-            border-radius: 16px;
-            padding: 1rem 1.15rem;
-            background: #ffffff;
-            box-shadow: 0 7px 18px rgba(15, 23, 42, 0.045);
-            margin-bottom: 1rem;
-        }
-        .section-title {font-size: 1.2rem; font-weight: 760; color: #0f172a; margin-bottom: 0.3rem;}
-        .section-caption {color: #64748b; font-size: 0.92rem; margin-bottom: 0.8rem;}
-        .flow-grid {display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0.55rem; align-items: stretch;}
-        .flow-step {border: 1px solid #dbeafe; background: #f8fafc; border-radius: 14px; padding: 0.8rem; min-height: 95px;}
-        .flow-label {font-weight: 750; color: #0f172a; font-size: 0.92rem; margin-bottom: 0.25rem;}
-        .flow-detail {color: #64748b; font-size: 0.78rem; line-height: 1.25;}
-        .callout {border-left: 5px solid #22c55e; background: #f0fdf4; border-radius: 12px; padding: 0.8rem 1rem; color: #14532d; margin: 0.8rem 0;}
-        .sidebar-note {font-size: 0.86rem; color: #475569; line-height: 1.35;}
-        div[data-testid="stButton"] > button {border-radius: 10px; width: 100%; border: 1px solid #d1d5db;}
-        div[data-testid="stMetricValue"] {font-size: 1.4rem;}
-        @media (max-width: 1200px) {
-            .status-grid {grid-template-columns: repeat(3, minmax(0, 1fr));}
-            .flow-grid {grid-template-columns: repeat(2, minmax(0, 1fr));}
-        }
-    </style>
-    """,
+<style>
+.block-container {padding-top: 1.2rem; padding-bottom: 2rem; max-width: 1400px;}
+#MainMenu, footer {visibility: hidden;}
+.hero-box {background: linear-gradient(130deg, #0d1117 0%, #102a43 55%, #0f3d25 100%); border-radius: 18px; padding: 1.45rem 1.7rem; margin-bottom: 1rem; color: white;}
+.hero-eyebrow {font-size: .75rem; letter-spacing: .14em; text-transform: uppercase; color: #93c5fd; font-weight: 700;}
+.hero-title {font-size: 2rem; font-weight: 800; margin: .25rem 0 .35rem 0; letter-spacing: -.02em;}
+.hero-sub {color: #cbd5e1; font-size: .96rem; line-height: 1.45;}
+.pill {display:inline-block; background:rgba(96,165,250,.14); border:1px solid rgba(96,165,250,.30); color:#bfdbfe; border-radius:999px; padding:.2rem .65rem; margin:.7rem .25rem 0 0; font-size:.78rem; font-weight:600;}
+section[data-testid="stSidebar"] {background:#0d1117;}
+section[data-testid="stSidebar"] * {color:#e2e8f0 !important;}
+</style>
+""",
     unsafe_allow_html=True,
 )
 
-# Local state
 cli_tokens = load_json(STATE_DIR / "devctl_tokens.json", {})
 audit_state = load_json(STATE_DIR / "audit.json", [])
 agents_state = load_json(STATE_DIR / "agents.json", {})
 device_registry = load_json(Path("device_registry.json"), {})
-
-# Live health
 ts_ok, ts_health = health(TOKEN_SERVICE_URL)
 api_ok, api_health = health(INTERNAL_API_URL)
-
-gpu_status = "unknown"
 agent_record = agents_state.get(AGENT_ID, {})
-if agent_record:
-    gpu_status = f"agent_quota={agent_record.get('gpu_quota_max_jobs', 'n/a')}"
+gpu_quota = agent_record.get("gpu_quota_max_jobs", "—")
 
 st.markdown(
     """
-    <div class='hero'>
-        <div class='hero-title'>Centralized Token Service Demo</div>
-        <div class='hero-subtitle'>Enterprise IAM control-plane prototype for Linux developers, Entra-style identity, non-human agents, sender-constrained tokens, GPU governance, and auditability.</div>
-        <div class='hero-pills'>
-            <span class='hero-pill'>Zero Trust</span>
-            <span class='hero-pill'>Linux CLI</span>
-            <span class='hero-pill'>OBO / Delegation</span>
-            <span class='hero-pill'>Agent / NHI Identity</span>
-            <span class='hero-pill'>GPU Governance</span>
-            <span class='hero-pill'>Audit Trail</span>
-        </div>
-    </div>
-    """,
+<div class="hero-box">
+  <div class="hero-eyebrow">Enterprise IAM · Proof-of-Concept</div>
+  <div class="hero-title">Centralized Token Service Demo</div>
+  <div class="hero-sub">Short-lived JWTs · Refresh rotation · OBO delegation · Sender-constrained tokens · Agent identity · GPU governance · Full audit trail</div>
+  <span class="pill">🛡 Zero Trust</span>
+  <span class="pill">🖥 Linux CLI</span>
+  <span class="pill">🔄 OBO / Delegation</span>
+  <span class="pill">🤖 Agent / NHI Identity</span>
+  <span class="pill">⚡ GPU Governance</span>
+  <span class="pill">📋 Audit Trail</span>
+  <span class="pill">🔑 PKI / cnf Binding</span>
+</div>
+""",
     unsafe_allow_html=True,
 )
 
-st.markdown(
-    "<div class='status-grid'>"
-    + status_card("Token Service", "Healthy" if ts_ok else "Error", "healthy" if ts_ok else "error", TOKEN_SERVICE_URL)
-    + status_card("Internal API", "Healthy" if api_ok else "Error", "healthy" if api_ok else "error", INTERNAL_API_URL)
-    + status_card("Device ID", DEVICE_ID, "active", "Linux endpoint")
-    + status_card("User", USER_ID, "active", "Developer principal")
-    + status_card("Agent", AGENT_ID, agent_record.get("status", "unknown"), "Non-human identity")
-    + status_card("GPU Quota", gpu_status, "allowed" if "quota" in gpu_status else "unknown", "Governed workload access")
-    + "</div>",
-    unsafe_allow_html=True,
-)
+status_items = [
+    ("🔐 Token Service", "Healthy" if ts_ok else "Error", TOKEN_SERVICE_URL, "healthy" if ts_ok else "error"),
+    ("🛡 Internal API", "Healthy" if api_ok else "Error", INTERNAL_API_URL, "healthy" if api_ok else "error"),
+    ("💻 Device", DEVICE_ID, "Linux endpoint", "active"),
+    ("👤 User", USER_ID, "Developer principal", "active"),
+    ("🤖 Agent", AGENT_ID, "Non-human identity", agent_record.get("status", "unknown")),
+    ("⚡ GPU Quota", f"{gpu_quota} job(s)", "Per-agent cap", "allowed" if gpu_quota != "—" else "unknown"),
+]
+cols = st.columns(6)
+for col, (label, value, detail, status) in zip(cols, status_items):
+    with col:
+        with st.container(border=True):
+            st.caption(label)
+            st.markdown(f"**{value}**")
+            st.caption(f"{status_icon(status)} {status}")
+            st.caption(detail)
 
-st.markdown(
-    """
-    <div class='section-card'>
-        <div class='section-title'>Architecture Flow</div>
-        <div class='section-caption'>How the demo explains enterprise token governance end to end.</div>
-        <div class='flow-grid'>
-    """
-    + flow_step("1. Linux CLI", "Developer or automation starts from devctl.py on a Linux-style endpoint.")
-    + flow_step("2. Entra / IdP", "Production source of user identity, MFA, Conditional Access, and OBO trust.")
-    + flow_step("3. Token Service", "Issues short-lived scoped JWTs, refreshes tokens, step-up tokens, and agent tokens.")
-    + flow_step("4. Device / PKI", "Binds tokens to device or agent certificate proof using cnf.x5t#S256.")
-    + flow_step("5. Internal / GPU API", "Validates signature, audience, scope, sender proof, and GPU quota rules.")
-    + flow_step("6. Audit / SIEM", "Records token issuance, OBO, step-up, agent, and GPU access events.")
-    + """
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+st.subheader("Architecture Flow")
+flow_cols = st.columns(6)
+flow_steps = [
+    ("1", "🖥", "Linux CLI", "devctl.py starts login, OBO, GPU, step-up, and agent flows"),
+    ("2", "🏛", "Entra / IdP", "Production source of user identity, MFA, Conditional Access, and OBO trust"),
+    ("3", "🔐", "Token Service", "Issues short-lived JWTs, refresh tokens, step-up tokens, and agent tokens"),
+    ("4", "🔑", "PKI / cnf", "Binds tokens to certificate thumbprint using cnf.x5t#S256"),
+    ("5", "🛡", "Internal / GPU API", "Validates signature, audience, scope, sender proof, and GPU quota"),
+    ("6", "📋", "Audit / SIEM", "Records auth, token, OBO, agent, and GPU access events"),
+]
+for col, (num, icon, title, detail) in zip(flow_cols, flow_steps):
+    with col:
+        with st.container(border=True):
+            st.caption(f"STEP {num}")
+            st.markdown(f"### {icon}")
+            st.markdown(f"**{title}**")
+            st.caption(detail)
 
 with st.sidebar:
-    st.title("Demo Controls")
-    st.markdown(
-        "<div class='sidebar-note'>Run the real demo actions from the terminal. These buttons are visual placeholders so the browser does not execute shell commands.</div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("## 🔐 Demo Guide")
+    st.caption("Run actual flows from PowerShell. The dashboard is read-only visualization for the interview.")
     st.divider()
-    st.button("Bootstrap Device Registry")
-    st.button("Login")
-    st.button("GPU Quota Update")
-    st.button("Register Agent")
-    st.button("Agent Comment")
-    st.button("Agent GPU Submit")
-    if st.button("Refresh Audit"):
+    st.markdown("**Identity / Auth**")
+    st.code("python devctl.py login --auto\npython devctl.py obo-build\npython devctl.py refresh", language="bash")
+    st.markdown("**Agent / NHI**")
+    st.code("python devctl.py register-agent\npython devctl.py agent-comment\npython devctl.py agent-gpu-submit", language="bash")
+    st.markdown("**Privileged Ops**")
+    st.code("python devctl.py deploy-prod\npython devctl.py gpu-quota-update --subject developer01 --quota 3", language="bash")
+    st.markdown("**Dashboard**")
+    if st.button("🔃 Refresh Audit Log", use_container_width=True):
         audit_state = load_json(STATE_DIR / "audit.json", [])
-        st.success("Audit state refreshed")
+        st.success("Audit refreshed")
     st.divider()
-    st.caption("Interview tip: show Overview → Token Claims → Agent Identity / NHI → Audit Timeline.")
+    st.caption("Best panel flow: Overview → Token Claims → Agent / NHI → Audit Timeline")
 
 
-overview_tab, trust_tab, claims_tab, agent_tab, gpu_tab, audit_tab = st.tabs(
-    ["Overview", "Device Trust", "Token Claims", "Agent Identity / NHI", "GPU Jobs", "Audit Timeline"]
+t_overview, t_fleet, t_claims, t_agent, t_gpu, t_audit = st.tabs(
+    ["🏠 Overview", "💻 Linux Developer Fleet", "🔎 Token Claims", "🤖 Agent / NHI", "⚡ GPU Jobs", "📋 Audit Timeline"]
 )
 
-with overview_tab:
-    st.markdown(
-        """
-        <div class='callout'>
-        <b>Panel explanation:</b> This dashboard is the visualization layer. The actual controls are enforced by the token service, CLI, internal API, certificate proof, scopes, and audit flow.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    left, right = st.columns([1.15, 1])
+with t_overview:
+    st.info("Panel explanation: This dashboard is the visualization layer only. Security controls are enforced by the token service, CLI, internal API, certificate proof, scopes, and audit flow.")
+    left, right = st.columns([1.05, 1])
     with left:
-        st.subheader("Service Health")
-        st.json({"token_service": ts_health, "internal_api": api_health})
+        st.subheader("What this demo proves")
+        st.markdown(
+            """
+- Centralized token issuance for Linux developer tooling.
+- OBO token exchange for downstream internal APIs.
+- Explicit agent / non-human identity instead of anonymous automation.
+- GPU access controlled by scopes and quota context.
+- Audit trail for token, step-up, agent, and GPU activity.
+"""
+        )
+        with st.expander("Raw health JSON"):
+            st.json({"token_service": ts_health, "internal_api": api_health})
     with right:
-        st.subheader("Demo Script")
+        st.subheader("Quick-start")
         st.code(
-            """python token_service.py
+            """# Terminal 1
+python token_service.py
+
+# Terminal 2
 python internal_api.py
+
+# Terminal 3
 python devctl.py login --auto
 python devctl.py obo-build
 python devctl.py gpu-submit
 python devctl.py register-agent
 python devctl.py agent-gpu-submit
 python devctl.py audit
+
+# Terminal 4
 streamlit run dashboard.py""",
             language="bash",
         )
 
-with trust_tab:
+with t_fleet:
     st.subheader("Linux Developer Fleet")
     st.caption("Each Linux laptop is treated as a device identity. Token issuance can be conditioned on managed status, EDR health, encryption, risk, and certificate binding.")
-
     fleet = device_registry.get("devices", []) if isinstance(device_registry, dict) else []
-    total_devices = len(fleet)
-    active_devices = sum(1 for d in fleet if str(d.get("status", "")).lower() == "active")
-    blocked_or_high_risk = sum(
-        1
-        for d in fleet
-        if str(d.get("status", "")).lower() == "blocked" or str(d.get("risk", "")).lower() == "high"
-    )
-    managed_count = sum(1 for d in fleet if d.get("managed") is True)
-    managed_percentage = (managed_count / total_devices * 100) if total_devices else 0.0
-
+    total = len(fleet)
+    active = sum(1 for d in fleet if str(d.get("status", "")).lower() == "active")
+    blocked_high = sum(1 for d in fleet if str(d.get("status", "")).lower() == "blocked" or str(d.get("risk", "")).lower() == "high")
+    managed = sum(1 for d in fleet if d.get("managed") is True)
+    pct = (managed / total * 100) if total else 0
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total devices", total_devices)
-    m2.metric("Active devices", active_devices)
-    m3.metric("Blocked/high-risk devices", blocked_or_high_risk)
-    m4.metric("Managed percentage", f"{managed_percentage:.0f}%")
-
-    display_rows = []
-    for d in fleet:
-        display_rows.append(
-            {
-                "device_id": d.get("device_id", ""),
-                "owner": d.get("owner", ""),
-                "os": d.get("os", ""),
-                "managed": badge("healthy" if d.get("managed") else "blocked"),
-                "edr_healthy": badge("healthy" if d.get("edr_healthy") else "blocked"),
-                "disk_encrypted": badge("healthy" if d.get("disk_encrypted") else "blocked"),
-                "risk": badge("healthy" if str(d.get("risk", "")).lower() == "low" else str(d.get("risk", "unknown"))),
-                "status": badge("active" if str(d.get("status", "")).lower() == "active" else str(d.get("status", "unknown"))),
-            }
-        )
-
-    fleet_df = pd.DataFrame(
-        display_rows,
-        columns=["device_id", "owner", "os", "managed", "edr_healthy", "disk_encrypted", "risk", "status"],
-    )
-    st.markdown(fleet_df.to_html(index=False, escape=False), unsafe_allow_html=True)
-
-with claims_tab:
-    st.subheader("Decoded Token Claims")
-    token = cli_tokens.get("access_token", "")
-    if token:
-        claims = decode_jwt_payload(token)
-        render_claim_summary(claims)
-        with st.expander("Raw selected claims"):
-            selected = {
-                "sub": claims.get("sub"),
-                "actor_type": claims.get("actor_type"),
-                "device_id": claims.get("device_id"),
-                "agent_id": claims.get("agent_id"),
-                "initiating_user": claims.get("initiating_user"),
-                "scope": claims.get("scope"),
-                "aud": claims.get("aud"),
-                "cnf": claims.get("cnf"),
-                "auth_strength": claims.get("auth_strength"),
-                "pim": claims.get("pim"),
-                "approval_id": claims.get("approval_id"),
-            }
-            st.json(selected)
+    m1.metric("Total devices", total)
+    m2.metric("Active devices", active)
+    m3.metric("Blocked/high-risk", blocked_high)
+    m4.metric("Managed", f"{pct:.0f}%")
+    if not fleet:
+        st.warning("No device registry found. Run: python devctl.py bootstrap-device-registry")
     else:
-        st.info("No .state/devctl_tokens.json access_token found yet. Run `python devctl.py login --auto` first.")
-
-with agent_tab:
-    st.subheader("Agent / Non-Human Identity Registry")
-    st.caption("Shows how the demo avoids anonymous automation by giving each agent an ID, owner, environment, scopes, and GPU quota.")
-    if agents_state:
         rows = []
-        for _, item in agents_state.items():
+        for d in fleet:
+            risk = str(d.get("risk", "unknown"))
+            status = str(d.get("status", "unknown"))
             rows.append(
                 {
-                    "agent_id": item.get("agent_id"),
-                    "status": item.get("status"),
-                    "agent_owner": item.get("agent_owner"),
-                    "environment": item.get("environment"),
-                    "allowed_scopes": ", ".join(item.get("allowed_scopes", [])),
-                    "gpu_quota_max_jobs": item.get("gpu_quota_max_jobs"),
+                    "device_id": d.get("device_id", ""),
+                    "owner": d.get("owner", ""),
+                    "os": d.get("os", ""),
+                    "managed": "✅" if d.get("managed") else "❌",
+                    "edr_healthy": "✅" if d.get("edr_healthy") else "❌",
+                    "disk_encrypted": "✅" if d.get("disk_encrypted") else "❌",
+                    "risk": f"{status_icon(risk)} {risk}",
+                    "status": f"{status_icon(status)} {status}",
                 }
             )
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    else:
-        st.info("No .state/agents.json data found. Run `python devctl.py register-agent` first.")
+        with st.expander("Raw device_registry.json"):
+            st.json(device_registry)
 
-with gpu_tab:
+with t_claims:
+    st.subheader("Decoded Token Claims")
+    token = cli_tokens.get("access_token", "")
+    if not token:
+        st.warning("No access token found yet. Run: python devctl.py login --auto")
+    else:
+        claims = decode_jwt_payload(token)
+        st.dataframe(claim_rows(claims), use_container_width=True, hide_index=True)
+        with st.expander("Full raw claims JSON"):
+            st.json(claims)
+
+with t_agent:
+    st.subheader("Agent / Non-Human Identity Registry")
+    st.caption("Each agent has an explicit ID, owner, environment, scopes, and GPU quota — never anonymous automation.")
+    if not agents_state:
+        st.warning("No agents registered yet. Run: python devctl.py register-agent")
+    else:
+        for aid, item in agents_state.items():
+            with st.container(border=True):
+                top_left, top_right = st.columns([3, 1])
+                with top_left:
+                    st.markdown(f"### 🤖 {aid}")
+                    st.write(
+                        f"Owner: **{item.get('agent_owner', '?')}** · "
+                        f"Env: **{item.get('environment', '?')}** · "
+                        f"GPU quota: **{item.get('gpu_quota_max_jobs', '?')} job(s)**"
+                    )
+                with top_right:
+                    st.metric("Status", f"{status_icon(item.get('status'))} {item.get('status', 'unknown')}")
+                st.caption("Allowed scopes")
+                st.code(", ".join(item.get("allowed_scopes", [])) or "—", language="text")
+        with st.expander("Raw agents JSON"):
+            st.json(agents_state)
+
+with t_gpu:
     st.subheader("GPU Governance Overview")
+    gpu_events = [e for e in audit_state if "gpu" in event_name(e).lower()]
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Agent GPU quota", gpu_quota, "max concurrent jobs")
+    col2.metric("Developer quota", "2", "demo max concurrent jobs")
+    col3.metric("GPU events", len(gpu_events), "audit-recorded actions")
+    st.success("Governance controls active: GPU job submission requires gpu.job.submit scope via OBO exchange; quota updates require step-up token with pim=true and approval_id; agent GPU access is bounded by registered quota.")
+    st.markdown("**Production roadmap**")
     st.markdown(
         """
-        - GPU job submission requires scoped authorization.
-        - Privileged quota updates require step-up authorization.
-        - Agent GPU access is bounded by agent identity and quota.
-        - Production design should connect this control layer to Kubernetes, Run:ai, NVIDIA GPU Operator, admission control, and GPU-hours reconciliation.
-        """
+- **Kubernetes admission webhook** — validate GPU token claims before pod scheduling.
+- **Run:ai / NVIDIA GPU Operator** — enforce quota at workload runtime layer.
+- **GPU-hours reconciliation** — compare audit trail with actual GPU consumption.
+- **Per-actor rate limiting** — throttle by user, device, agent, and scope.
+"""
     )
-    st.markdown(badge("allowed"), unsafe_allow_html=True)
 
-with audit_tab:
+with t_audit:
     st.subheader("Audit Timeline")
-    st.caption("Trace login, token issuance, OBO, refresh, step-up, agent registration, and GPU actions.")
+    st.caption("Every auth, token issuance, OBO, refresh, step-up, agent, and GPU event — newest first.")
     if not audit_state:
-        st.info("No .state/audit.json data found. Run `python devctl.py audit` after demo commands.")
+        st.warning("No audit events yet. Run: python devctl.py audit")
     else:
-        rows = []
+        counts = {}
         for e in audit_state:
+            name = event_name(e)
+            counts[name] = counts.get(name, 0) + 1
+        metric_cols = st.columns(min(max(len(counts), 1), 5))
+        for i, (name, count) in enumerate(list(counts.items())[:5]):
+            with metric_cols[i % len(metric_cols)]:
+                st.metric(name.replace("_", " ").title(), count)
+        rows = []
+        for e in reversed(audit_state[-120:]):
+            name = event_name(e)
+            ts_raw = e.get("timestamp") or e.get("ts") or ""
+            actor = display_value(e.get("actor_type"))
+            user = display_value(e.get("user") or e.get("sub"))
+            agent = display_value(e.get("agent_id"))
+            identity = agent if agent != "—" else user
             rows.append(
                 {
-                    "timestamp": display_value(e.get("timestamp") or e.get("ts")),
-                    "event_type": display_value(e.get("event_type") or e.get("event")),
-                    "actor_type": display_value(e.get("actor_type")),
-                    "user": display_value(e.get("user") or e.get("sub")),
-                    "agent_id": display_value(e.get("agent_id")),
-                    "scope/scopes": display_value(e.get("scope") or e.get("scopes")),
-                    "decision": display_value(e.get("decision")),
-                    "reason": display_value(e.get("reason")),
+                    "timestamp": display_value(ts_raw),
+                    "event_type": name,
+                    "actor": actor,
+                    "user_or_agent": identity,
+                    "scope_or_detail": display_value(e.get("scope") or e.get("scopes") or e.get("reason")),
+                    "decision": display_value(e.get("decision") or "allow"),
                     "correlation_id": display_value(e.get("correlation_id")),
                 }
             )
-        df = pd.DataFrame(rows)
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        with st.expander(f"Export — all {len(audit_state)} events as JSON"):
+            st.json(audit_state)
