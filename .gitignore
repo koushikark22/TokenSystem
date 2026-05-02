@@ -1,0 +1,7 @@
+﻿pki/
+__pycache__/
+*.pyc
+.env
+.venv/
+tokens.json
+*.log
