@@ -299,9 +299,46 @@ streamlit run dashboard.py""",
         )
 
 with trust_tab:
-    st.subheader("Device Trust Snapshot")
-    st.caption("Local demo device registry. In production this would come from enterprise device identity, managed certificates, or workload identity.")
-    st.json(device_registry)
+    st.subheader("Linux Developer Fleet")
+    st.caption("Each Linux laptop is treated as a device identity. Token issuance can be conditioned on managed status, EDR health, encryption, risk, and certificate binding.")
+
+    fleet = device_registry.get("devices", []) if isinstance(device_registry, dict) else []
+    total_devices = len(fleet)
+    active_devices = sum(1 for d in fleet if str(d.get("status", "")).lower() == "active")
+    blocked_or_high_risk = sum(
+        1
+        for d in fleet
+        if str(d.get("status", "")).lower() == "blocked" or str(d.get("risk", "")).lower() == "high"
+    )
+    managed_count = sum(1 for d in fleet if d.get("managed") is True)
+    managed_percentage = (managed_count / total_devices * 100) if total_devices else 0.0
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total devices", total_devices)
+    m2.metric("Active devices", active_devices)
+    m3.metric("Blocked/high-risk devices", blocked_or_high_risk)
+    m4.metric("Managed percentage", f"{managed_percentage:.0f}%")
+
+    display_rows = []
+    for d in fleet:
+        display_rows.append(
+            {
+                "device_id": d.get("device_id", ""),
+                "owner": d.get("owner", ""),
+                "os": d.get("os", ""),
+                "managed": badge("healthy" if d.get("managed") else "blocked"),
+                "edr_healthy": badge("healthy" if d.get("edr_healthy") else "blocked"),
+                "disk_encrypted": badge("healthy" if d.get("disk_encrypted") else "blocked"),
+                "risk": badge("healthy" if str(d.get("risk", "")).lower() == "low" else str(d.get("risk", "unknown"))),
+                "status": badge("active" if str(d.get("status", "")).lower() == "active" else str(d.get("status", "unknown"))),
+            }
+        )
+
+    fleet_df = pd.DataFrame(
+        display_rows,
+        columns=["device_id", "owner", "os", "managed", "edr_healthy", "disk_encrypted", "risk", "status"],
+    )
+    st.markdown(fleet_df.to_html(index=False, escape=False), unsafe_allow_html=True)
 
 with claims_tab:
     st.subheader("Decoded Token Claims")
