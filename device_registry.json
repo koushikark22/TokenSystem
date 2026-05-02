@@ -1,15 +1,35 @@
 {
   "devices": [
     {
-      "cert_thumbprint": "2Uy_vjE-CO2d1nkgSZjWFxdEXI0SpzINg9TzTbUwmpY",
       "device_id": "linux-laptop-001",
-      "disk_encrypted": true,
-      "edr_healthy": true,
-      "managed": true,
-      "os": "linux",
       "owner": "developer01",
+      "os": "Ubuntu 22.04",
+      "managed": true,
+      "edr_healthy": true,
+      "disk_encrypted": true,
+      "risk": "low",
+      "status": "active",
+      "cert_thumbprint": "2Uy_vjE-CO2d1nkgSZjWFxdEXI0SpzINg9TzTbUwmpY"
+    },
+    {
+      "device_id": "linux-laptop-002",
+      "owner": "developer02",
+      "os": "Ubuntu 24.04",
+      "managed": true,
+      "edr_healthy": true,
+      "disk_encrypted": true,
       "risk": "low",
       "status": "active"
+    },
+    {
+      "device_id": "linux-laptop-003",
+      "owner": "contractor01",
+      "os": "Ubuntu 22.04",
+      "managed": false,
+      "edr_healthy": false,
+      "disk_encrypted": false,
+      "risk": "high",
+      "status": "blocked"
     }
   ]
 }
