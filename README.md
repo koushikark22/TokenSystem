@@ -1,8 +1,8 @@
 # Centralized Token Service Demo (Linux CLI, OBO, PKI, and GPU API Controls)
 
-This repository is a personal proof-of-concept showing how a centralized token service can secure internal APIs used by Linux developer tooling and automated agents.
+This repository is a proof-of-concept architecture demo showing how a centralized token service can secure internal APIs used by Linux developer tooling and automated agents.
 
-The implementation is centered on identity architecture controls:
+The implementation is centered on identity architecture controls and design goals:
 
 - short-lived JWT access tokens
 - refresh-token rotation with reuse detection
@@ -125,6 +125,6 @@ For a production implementation, common hardening steps include:
 
 ---
 
-## Interview framing
+## Architecture summary
 
-This project is intentionally small and explainable: it demonstrates identity-bound API access without introducing unnecessary architecture complexity. It is suited for discussing security tradeoffs, threat reduction, and practical authorization design in backend systems.
+This project is intentionally small and explainable: it demonstrates identity-bound API access without unnecessary architecture complexity. It is suitable for discussing security tradeoffs, threat reduction, and practical authorization design in backend systems.
