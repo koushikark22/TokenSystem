@@ -46,8 +46,6 @@ def decode_jwt_payload(token: str):
         return {}
 
 
-
-
 def display_value(value):
     if value is None:
         return ""
@@ -56,6 +54,8 @@ def display_value(value):
     if isinstance(value, dict):
         return json.dumps(value, sort_keys=True)
     return str(value)
+
+
 def badge(value: str):
     raw_text = str(value or "unknown")
     safe_text = html.escape(raw_text)
