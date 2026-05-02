@@ -1,0 +1,15 @@
+{
+  "devices": [
+    {
+      "device_id": "linux-laptop-001",
+      "owner": "developer01",
+      "os": "linux",
+      "managed": true,
+      "edr_healthy": true,
+      "disk_encrypted": true,
+      "cert_thumbprint": "",
+      "risk": "low",
+      "status": "active"
+    }
+  ]
+}
