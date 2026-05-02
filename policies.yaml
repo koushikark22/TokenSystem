@@ -17,6 +17,7 @@ policies:
     require_step_up_mfa: true
     require_pim: true
     require_approval_id: true
+    require_device_managed: true
     require_cert_bound_token: true
   agent.token:
     allowed_actor_types: [agent]

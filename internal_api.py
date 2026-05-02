@@ -133,7 +133,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if p == "/deploy/prod":
                 c = self.validate(["deploy.prod"], require_pim=True)
-                if c["security_context"]["device_posture_reason"] not in {"allowed", "no_device_context"}:
+                if c["security_context"]["device_posture_reason"] != "allowed":
                     return self.send_json({"error": c["security_context"]["device_posture_reason"]}, 403)
                 ok, reason = evaluate_policy("deploy.prod", self._policy_context(c, body))
                 if not ok: return self.send_json({"error": reason}, 403)
@@ -141,7 +141,7 @@ class Handler(BaseHTTPRequestHandler):
 
             if p == "/gpu/jobs/submit":
                 c = self.validate(["gpu.job.submit"])
-                if c["security_context"]["device_posture_reason"] not in {"allowed", "no_device_context"}:
+                if c["security_context"]["device_posture_reason"] != "allowed":
                     return self.send_json({"error": c["security_context"]["device_posture_reason"]}, 403)
                 actor = actor_from_claims(c)
                 for key in [f"user:{c.get('sub')}", f"device:{c.get('device_id')}", f"agent:{c.get('agent_id')}", "scope:gpu.job.submit"]:
@@ -158,7 +158,7 @@ class Handler(BaseHTTPRequestHandler):
 
             if p == "/gpu/quota/update":
                 c = self.validate(["gpu.quota.update"], require_pim=True)
-                if c["security_context"]["device_posture_reason"] not in {"allowed", "no_device_context"}:
+                if c["security_context"]["device_posture_reason"] != "allowed":
                     return self.send_json({"error": c["security_context"]["device_posture_reason"]}, 403)
                 ok, reason = evaluate_policy("gpu.quota.update", self._policy_context(c, body))
                 if not ok: return self.send_json({"error": reason}, 403)
@@ -169,7 +169,7 @@ class Handler(BaseHTTPRequestHandler):
                 c = self.validate(["pr.comment"])
                 if c.get("actor_type") != "agent" or not c.get("agent_id"):
                     return self.send_json({"error": "agent token with explicit agent_id required"}, 403)
-                if c["security_context"]["device_posture_reason"] not in {"allowed", "no_device_context"}:
+                if c["security_context"]["device_posture_reason"] != "allowed":
                     return self.send_json({"error": c["security_context"]["device_posture_reason"]}, 403)
                 return self.send_json({"result": "agent comment accepted", "agent_id": c.get("agent_id")})
             return self.send_json({"error": "not found"}, 404)

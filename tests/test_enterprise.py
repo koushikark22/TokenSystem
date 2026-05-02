@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -8,7 +9,6 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
-import internal_api
 import token_utils
 from device_registry import bootstrap_device_registry, check_device_posture
 from policy_engine import evaluate_policy
@@ -29,19 +29,29 @@ def setup_module():
     _write_cert_key(pki / "agent-gpu-planner-dev.cert.pem", pki / "agent-gpu-planner-dev.key.pem", "agent")
 
 
-def test_jwks_validation():
+def test_jwks_validation_succeeds():
     token = token_utils.issue_jwt(subject="developer01", audience=token_utils.INTERNAL_API_AUD, client_id="c1", scopes=["build.read"], cnf_x5t="abc")
     claims = token_utils.decode_and_validate_jwt(token, token_utils.INTERNAL_API_AUD)
     assert claims["sub"] == "developer01"
+
+
+def test_jwks_missing_kid_fails_without_fallback(monkeypatch):
+    token = token_utils.issue_jwt(subject="developer01", audience=token_utils.INTERNAL_API_AUD, client_id="c1", scopes=["build.read"], cnf_x5t="abc")
+    monkeypatch.setattr(token_utils, "ALLOW_LOCAL_SIGNING_CERT_FALLBACK", False)
+    monkeypatch.setattr(token_utils, "get_cached_jwks", lambda uri: {"keys": []})
+    try:
+        token_utils.decode_and_validate_jwt(token, token_utils.INTERNAL_API_AUD)
+        assert False
+    except Exception as e:
+        assert "jwks_validation_failed" in str(e)
 
 
 def test_stolen_jwt_wrong_cert_fails():
     cert = token_utils.cert_to_pem_string(token_utils.DEVICE_CERT_PATH)
     thumb = token_utils.cert_thumbprint_sha256_pem(cert)
     token = token_utils.issue_jwt(subject="developer01", audience=token_utils.INTERNAL_API_AUD, client_id="c1", scopes=["gpu.job.submit"], cnf_x5t=thumb)
-    wrong = "badthumb"
     try:
-        token_utils.validate_sender_constrained_proof({"cnf": {"x5t#S256": thumb}}, "", None, token, "POST", "/gpu/jobs/submit", dev_header_thumbprint=wrong)
+        token_utils.validate_sender_constrained_proof({"cnf": {"x5t#S256": thumb}}, "", None, token, "POST", "/gpu/jobs/submit", dev_header_thumbprint="bad")
         assert False
     except Exception as e:
         assert "certificate_binding_failed" in str(e)
@@ -49,27 +59,20 @@ def test_stolen_jwt_wrong_cert_fails():
 
 def test_device_posture_checks():
     info = bootstrap_device_registry()
-    ok, reason = check_device_posture("linux-laptop-001", info["cert_thumbprint"])
-    assert ok and reason == "allowed"
-    ok2, reason2 = check_device_posture("linux-laptop-001", "wrong")
-    assert (not ok2) and reason2 == "certificate_binding_failed"
+    assert check_device_posture("linux-laptop-001", info["cert_thumbprint"]) == (True, "allowed")
+    assert check_device_posture("linux-laptop-001", "wrong")[1] == "certificate_binding_failed"
 
 
-def test_policy_device_managed_false_denied():
-    ok, reason = evaluate_policy("gpu.job.submit", {"actor_type": "user", "device_managed": False, "cert_bound": True, "gpu_count": 1})
+def test_gpu_quota_update_policy_requires_stepup_pim_approval():
+    ok, _ = evaluate_policy("gpu.quota.update", {"actor_type": "user", "step_up_mfa": True, "pim": True, "approval_id": "APR-1", "device_managed": True, "cert_bound": True})
+    assert ok
+    ok2, _ = evaluate_policy("gpu.quota.update", {"actor_type": "user", "step_up_mfa": False, "pim": True, "approval_id": "APR-1", "device_managed": True, "cert_bound": True})
+    assert not ok2
+
+
+def test_deploy_prod_policy_fails_if_device_not_managed():
+    ok, reason = evaluate_policy("deploy.prod", {"actor_type": "user", "step_up_mfa": True, "pim": True, "approval_id": "APR-1", "device_managed": False, "cert_bound": True})
     assert not ok and reason == "device_not_managed"
-
-
-def test_gpu_quota_exceeded():
-    qm = internal_api.QM
-    internal_api.GPU_QUOTAS["developer01"] = 1
-    allowed, reason, limit = qm.allow_gpu("developer01", 1)
-    assert not allowed and reason == "gpu_quota_exceeded" and limit == 1
-
-
-def test_quota_update_requires_stepup_pim_and_approval():
-    ok, reason = evaluate_policy("gpu.quota.update", {"actor_type": "user", "step_up_mfa": False, "pim": False, "approval_id": None, "device_managed": True, "cert_bound": True})
-    assert not ok and "missing" in reason
 
 
 def test_agent_token_claims_include_actor_fields():

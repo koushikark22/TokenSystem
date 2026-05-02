@@ -23,6 +23,7 @@ ISSUER_ID = os.getenv("ISSUER_ID", "issuer-local-01")
 ISSUER_URL = os.getenv("ISSUER_URL", "http://localhost:8000")
 JWKS_CACHE_TTL_SECONDS = int(os.getenv("JWKS_CACHE_TTL_SECONDS", "300"))
 DEV_MODE_CERT_HEADER = os.getenv("DEV_MODE_CERT_HEADER", "0") == "1"
+ALLOW_LOCAL_SIGNING_CERT_FALLBACK = os.getenv("ALLOW_LOCAL_SIGNING_CERT_FALLBACK", "0") == "1"
 ISSUER = ISSUER_URL
 TOKEN_SERVICE_AUD = os.getenv("TOKEN_SERVICE_AUD", "token-service")
 INTERNAL_API_AUD = os.getenv("INTERNAL_API_AUD", "internal-api")
@@ -96,10 +97,12 @@ def decode_and_validate_jwt(token: str, audience: str, *, jwks_uri: Optional[str
     try:
         keys = get_cached_jwks(jwks_uri).get("keys", [])
         key = next((k for k in keys if k.get("kid") == kid), None)
-        if not key: raise ValueError("kid_not_found")
+        if not key:
+            raise ValueError("kid_not_found")
         _verify_with_jwk(signing_input, signature, key)
-    except Exception:
-        # fallback only for local token service development
+    except Exception as jwks_error:
+        if not ALLOW_LOCAL_SIGNING_CERT_FALLBACK:
+            raise ValueError(f"jwks_validation_failed:{jwks_error}")
         cert = x509.load_pem_x509_certificate(SIGNING_CERT_PATH.read_bytes())
         cert.public_key().verify(signature, signing_input, padding.PKCS1v15(), hashes.SHA256())
 

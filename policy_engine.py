@@ -21,7 +21,7 @@ def load_policies() -> Dict[str, Any]:
         "policies": {
             "gpu.quota.update": {"allowed_actor_types": ["user"], "require_step_up_mfa": True, "require_pim": True, "require_approval_id": True, "require_device_managed": True, "require_cert_bound_token": True},
             "gpu.job.submit": {"allowed_actor_types": ["user", "agent"], "require_cert_bound_token": True, "require_device_managed": True, "max_gpu_count": 8},
-            "deploy.prod": {"allowed_actor_types": ["user"], "require_step_up_mfa": True, "require_pim": True, "require_approval_id": True, "require_cert_bound_token": True},
+            "deploy.prod": {"allowed_actor_types": ["user"], "require_step_up_mfa": True, "require_pim": True, "require_approval_id": True, "require_device_managed": True, "require_cert_bound_token": True},
             "agent.token": {"allowed_actor_types": ["agent"], "require_agent_id": True, "require_initiating_user": True, "require_cert_bound_token": True},
         }
     }
