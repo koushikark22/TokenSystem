@@ -19,6 +19,13 @@ The implementation is centered on identity architecture controls and design goal
 
 ---
 
+
+## Demo vs production
+
+This repository is a local architecture demo. It demonstrates the identity and token control flow, but production deployment requires Entra ID integration, HSM/KMS-backed signing keys, TLS/mTLS, durable token state, immutable audit logging, SIEM export, and GPU enforcement through Kubernetes/Run:ai/GPU platform controls.
+
+---
+
 ## Repository layout
 
 - `token_service.py` — centralized token service APIs (device flow simulation, token issuance, refresh, OBO, step-up, agent token issuance)
