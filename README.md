@@ -24,6 +24,7 @@ The implementation is centered on identity architecture controls and design goal
 - `token_service.py` — centralized token service APIs (device flow simulation, token issuance, refresh, OBO, step-up, agent token issuance)
 - `internal_api.py` — protected internal and GPU-oriented API endpoints
 - `devctl.py` — CLI driver used to demonstrate end-to-end flows
+- `dashboard.py` — optional Streamlit dashboard for visualizing service health, identity context, claims, and audit timeline
 - `token_utils.py` — JWT signing/validation, cert thumbprints, proof signing/verification helpers
 - `pki_bootstrap.py` — local PKI artifact bootstrap for demo certificates/keys
 - `requirements.txt` — Python dependencies
@@ -78,6 +79,14 @@ python devctl.py register-agent
 python devctl.py agent-comment
 python devctl.py agent-gpu-submit
 python devctl.py audit
+```
+
+## Optional dashboard
+
+After starting `token_service.py` and `internal_api.py`, run:
+
+```bash
+streamlit run dashboard.py
 ```
 
 ---

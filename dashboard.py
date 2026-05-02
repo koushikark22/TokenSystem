@@ -1,4 +1,5 @@
 import base64
+import html
 import json
 from pathlib import Path
 
@@ -46,15 +47,16 @@ def decode_jwt_payload(token: str):
 
 
 def badge(value: str):
-    text = str(value or "unknown")
-    low = text.lower()
+    raw_text = str(value or "unknown")
+    safe_text = html.escape(raw_text)
+    low = raw_text.lower()
     if any(k in low for k in ["ok", "active", "allow", "allowed", "healthy", "green"]):
         color = "#2e7d32"
     elif any(k in low for k in ["step_up", "step-up", "pending", "mfa"]):
         color = "#f9a825"
     else:
         color = "#c62828"
-    return f"<span style='background:{color};color:white;padding:4px 9px;border-radius:12px;font-size:0.8rem'>{text}</span>"
+    return f"<span style='background:{color};color:white;padding:4px 9px;border-radius:12px;font-size:0.8rem'>{safe_text}</span>"
 
 
 st.set_page_config(page_title="Centralized Token Service Demo", layout="wide")
@@ -98,6 +100,7 @@ st.markdown(
 
 with st.sidebar:
     st.header("Actions")
+    st.caption("Demo placeholders only — run the CLI commands from the Demo Script section to execute actions.")
     st.button("Bootstrap Device Registry")
     st.button("Login")
     st.button("GPU Quota Update")
