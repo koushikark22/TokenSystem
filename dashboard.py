@@ -56,58 +56,34 @@ def display_value(value):
     return str(value)
 
 
-def short_text(value: str, max_len: int = 22) -> str:
-    text = str(value or "unknown")
-    if len(text) <= max_len:
-        return text
-    return f"{text[: max_len - 3]}..."
-
-
 def badge(value: str):
     raw_text = str(value or "unknown")
     safe_text = html.escape(raw_text)
     low = raw_text.lower()
     if any(k in low for k in ["ok", "active", "allow", "allowed", "healthy", "green"]):
-        css_class = "badge badge-green"
+        color = "#15803d"
+        bg = "#dcfce7"
     elif any(k in low for k in ["step_up", "step-up", "pending", "mfa"]):
-        css_class = "badge badge-yellow"
+        color = "#92400e"
+        bg = "#fef3c7"
     else:
-        css_class = "badge badge-red"
-    return f"<span class='{css_class}'>{safe_text}</span>"
-
-
-def status_card(title: str, value: str, status: str, detail: str = ""):
-    return f"""
-    <div class='status-card'>
-        <div class='status-title'>{html.escape(title)}</div>
-        <div class='status-value' title='{html.escape(str(value))}'>{html.escape(short_text(value, 18))}</div>
-        <div>{badge(status)}</div>
-        <div class='status-detail'>{html.escape(detail)}</div>
-    </div>
-    """
-
-
-def flow_step(label: str, detail: str):
-    return f"""
-    <div class='flow-step'>
-        <div class='flow-label'>{html.escape(label)}</div>
-        <div class='flow-detail'>{html.escape(detail)}</div>
-    </div>
-    """
+        color = "#991b1b"
+        bg = "#fee2e2"
+    return f"<span style='background:{bg}; color:{color}; padding:4px 10px; border-radius:999px; font-weight:700; font-size:0.78rem'>{safe_text}</span>"
 
 
 def render_claim_summary(claims: dict):
     rows = [
-        {"Claim": "sub", "Meaning": "Human or subject identity", "Value": display_value(claims.get("sub"))},
-        {"Claim": "actor_type", "Meaning": "Human vs agent actor", "Value": display_value(claims.get("actor_type"))},
-        {"Claim": "device_id", "Meaning": "Linux endpoint/device context", "Value": display_value(claims.get("device_id"))},
-        {"Claim": "agent_id", "Meaning": "Non-human identity", "Value": display_value(claims.get("agent_id"))},
-        {"Claim": "scope", "Meaning": "Least-privilege permission", "Value": display_value(claims.get("scope"))},
-        {"Claim": "aud", "Meaning": "Target API/resource", "Value": display_value(claims.get("aud"))},
-        {"Claim": "cnf", "Meaning": "Certificate-bound proof", "Value": display_value(claims.get("cnf"))},
-        {"Claim": "auth_strength", "Meaning": "MFA/step-up strength", "Value": display_value(claims.get("auth_strength"))},
-        {"Claim": "pim", "Meaning": "Privileged activation", "Value": display_value(claims.get("pim"))},
-        {"Claim": "approval_id", "Meaning": "Step-up approval evidence", "Value": display_value(claims.get("approval_id"))},
+        {"Claim": "sub", "What to explain": "Subject / human identity", "Value": display_value(claims.get("sub"))},
+        {"Claim": "actor_type", "What to explain": "Whether caller is user or agent", "Value": display_value(claims.get("actor_type"))},
+        {"Claim": "device_id", "What to explain": "Linux endpoint/device context", "Value": display_value(claims.get("device_id"))},
+        {"Claim": "agent_id", "What to explain": "Non-human identity", "Value": display_value(claims.get("agent_id"))},
+        {"Claim": "scope", "What to explain": "Least-privilege permission", "Value": display_value(claims.get("scope"))},
+        {"Claim": "aud", "What to explain": "Target API/resource", "Value": display_value(claims.get("aud"))},
+        {"Claim": "cnf", "What to explain": "Certificate-bound proof", "Value": display_value(claims.get("cnf"))},
+        {"Claim": "auth_strength", "What to explain": "MFA / stronger auth context", "Value": display_value(claims.get("auth_strength"))},
+        {"Claim": "pim", "What to explain": "Privileged activation", "Value": display_value(claims.get("pim"))},
+        {"Claim": "approval_id", "What to explain": "Step-up approval evidence", "Value": display_value(claims.get("approval_id"))},
     ]
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
@@ -117,65 +93,46 @@ st.set_page_config(page_title="Centralized Token Service Demo", page_icon="🔐"
 st.markdown(
     """
     <style>
-        .block-container {padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1500px;}
+        .block-container {padding-top: 1.4rem; max-width: 1380px;}
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
-        .hero {
-            padding: 1.35rem 1.5rem;
-            border-radius: 18px;
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 54%, #14532d 100%);
-            color: white;
-            margin-bottom: 1.15rem;
-            box-shadow: 0 14px 32px rgba(15, 23, 42, 0.18);
-        }
-        .hero-title {font-size: 2rem; font-weight: 760; letter-spacing: -0.02em; margin-bottom: 0.25rem;}
-        .hero-subtitle {font-size: 1rem; opacity: 0.92; max-width: 1080px;}
-        .hero-pills {margin-top: 0.85rem; display: flex; gap: 0.45rem; flex-wrap: wrap;}
-        .hero-pill {
-            border: 1px solid rgba(255,255,255,0.22);
-            border-radius: 999px;
-            padding: 0.25rem 0.7rem;
-            background: rgba(255,255,255,0.10);
-            font-size: 0.82rem;
-        }
-        .status-grid {display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0.8rem; margin: 0.9rem 0 1.15rem 0;}
-        .status-card {
-            background: #ffffff;
+        .top-box {
             border: 1px solid #e5e7eb;
-            border-radius: 16px;
-            padding: 0.95rem 0.95rem 0.8rem 0.95rem;
-            min-height: 132px;
-            box-shadow: 0 7px 18px rgba(15, 23, 42, 0.06);
-        }
-        .status-title {font-size: 0.78rem; text-transform: uppercase; color: #64748b; letter-spacing: 0.055em; font-weight: 700;}
-        .status-value {font-size: 1.42rem; font-weight: 760; margin: 0.28rem 0 0.52rem 0; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
-        .status-detail {font-size: 0.76rem; color: #64748b; margin-top: 0.45rem; min-height: 1rem;}
-        .badge {padding: 0.22rem 0.62rem; border-radius: 999px; font-size: 0.78rem; font-weight: 700; display: inline-block;}
-        .badge-green {background: #dcfce7; color: #166534; border: 1px solid #bbf7d0;}
-        .badge-yellow {background: #fef3c7; color: #92400e; border: 1px solid #fde68a;}
-        .badge-red {background: #fee2e2; color: #991b1b; border: 1px solid #fecaca;}
-        .section-card {
-            border: 1px solid #e5e7eb;
-            border-radius: 16px;
-            padding: 1rem 1.15rem;
+            border-radius: 14px;
+            padding: 18px 22px;
             background: #ffffff;
-            box-shadow: 0 7px 18px rgba(15, 23, 42, 0.045);
-            margin-bottom: 1rem;
+            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
+            margin-bottom: 16px;
         }
-        .section-title {font-size: 1.2rem; font-weight: 760; color: #0f172a; margin-bottom: 0.3rem;}
-        .section-caption {color: #64748b; font-size: 0.92rem; margin-bottom: 0.8rem;}
-        .flow-grid {display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0.55rem; align-items: stretch;}
-        .flow-step {border: 1px solid #dbeafe; background: #f8fafc; border-radius: 14px; padding: 0.8rem; min-height: 95px;}
-        .flow-label {font-weight: 750; color: #0f172a; font-size: 0.92rem; margin-bottom: 0.25rem;}
-        .flow-detail {color: #64748b; font-size: 0.78rem; line-height: 1.25;}
-        .callout {border-left: 5px solid #22c55e; background: #f0fdf4; border-radius: 12px; padding: 0.8rem 1rem; color: #14532d; margin: 0.8rem 0;}
-        .sidebar-note {font-size: 0.86rem; color: #475569; line-height: 1.35;}
-        div[data-testid="stButton"] > button {border-radius: 10px; width: 100%; border: 1px solid #d1d5db;}
-        div[data-testid="stMetricValue"] {font-size: 1.4rem;}
-        @media (max-width: 1200px) {
-            .status-grid {grid-template-columns: repeat(3, minmax(0, 1fr));}
-            .flow-grid {grid-template-columns: repeat(2, minmax(0, 1fr));}
+        .eyebrow {color:#16a34a; font-weight:700; font-size:0.82rem; letter-spacing:0.06em; text-transform:uppercase; margin-bottom:4px;}
+        .main-title {font-size:2rem; font-weight:760; color:#111827; margin-bottom:4px;}
+        .subtitle {font-size:0.98rem; color:#4b5563; line-height:1.45; max-width:1050px;}
+        .mini-card {
+            border:1px solid #e5e7eb;
+            border-radius:12px;
+            padding:14px 14px 12px 14px;
+            background:#ffffff;
+            min-height:118px;
         }
+        .mini-label {font-size:0.78rem; color:#6b7280; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;}
+        .mini-value {font-size:1.25rem; font-weight:740; color:#111827; margin:6px 0 8px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+        .flow-row {
+            border:1px solid #e5e7eb;
+            border-radius:12px;
+            padding:14px 16px;
+            background:#f9fafb;
+            font-size:0.96rem;
+            line-height:1.6;
+        }
+        .explain-box {
+            border-left:4px solid #16a34a;
+            padding:10px 14px;
+            background:#f0fdf4;
+            border-radius:10px;
+            color:#14532d;
+            margin-bottom:14px;
+        }
+        div[data-testid="stButton"] > button {width:100%; border-radius:10px;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -191,79 +148,70 @@ device_registry = load_json(Path("device_registry.json"), {})
 ts_ok, ts_health = health(TOKEN_SERVICE_URL)
 api_ok, api_health = health(INTERNAL_API_URL)
 
-gpu_status = "unknown"
 agent_record = agents_state.get(AGENT_ID, {})
+gpu_status = "unknown"
 if agent_record:
-    gpu_status = f"agent_quota={agent_record.get('gpu_quota_max_jobs', 'n/a')}"
+    gpu_status = f"quota={agent_record.get('gpu_quota_max_jobs', 'n/a')}"
 
 st.markdown(
     """
-    <div class='hero'>
-        <div class='hero-title'>Centralized Token Service Demo</div>
-        <div class='hero-subtitle'>Enterprise IAM control-plane prototype for Linux developers, Entra-style identity, non-human agents, sender-constrained tokens, GPU governance, and auditability.</div>
-        <div class='hero-pills'>
-            <span class='hero-pill'>Zero Trust</span>
-            <span class='hero-pill'>Linux CLI</span>
-            <span class='hero-pill'>OBO / Delegation</span>
-            <span class='hero-pill'>Agent / NHI Identity</span>
-            <span class='hero-pill'>GPU Governance</span>
-            <span class='hero-pill'>Audit Trail</span>
-        </div>
+    <div class='top-box'>
+        <div class='eyebrow'>Enterprise IAM + GPU Governance Prototype</div>
+        <div class='main-title'>Centralized Token Service Demo</div>
+        <div class='subtitle'>A Linux developer and agentic-AI access-control demo showing short-lived JWTs, OBO delegation, sender-constrained proof, step-up, non-human identity, GPU authorization, and auditability.</div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-st.markdown(
-    "<div class='status-grid'>"
-    + status_card("Token Service", "Healthy" if ts_ok else "Error", "healthy" if ts_ok else "error", TOKEN_SERVICE_URL)
-    + status_card("Internal API", "Healthy" if api_ok else "Error", "healthy" if api_ok else "error", INTERNAL_API_URL)
-    + status_card("Device ID", DEVICE_ID, "active", "Linux endpoint")
-    + status_card("User", USER_ID, "active", "Developer principal")
-    + status_card("Agent", AGENT_ID, agent_record.get("status", "unknown"), "Non-human identity")
-    + status_card("GPU Quota", gpu_status, "allowed" if "quota" in gpu_status else "unknown", "Governed workload access")
-    + "</div>",
-    unsafe_allow_html=True,
-)
+cols = st.columns(6)
+status_items = [
+    ("Token Service", "Healthy" if ts_ok else "Error", "healthy" if ts_ok else "error"),
+    ("Internal API", "Healthy" if api_ok else "Error", "healthy" if api_ok else "error"),
+    ("Device", DEVICE_ID, "active"),
+    ("User", USER_ID, "active"),
+    ("Agent", AGENT_ID, agent_record.get("status", "unknown")),
+    ("GPU", gpu_status, "allowed" if "quota" in gpu_status else "unknown"),
+]
+for col, (label, value, status) in zip(cols, status_items):
+    with col:
+        st.markdown(
+            f"""
+            <div class='mini-card'>
+                <div class='mini-label'>{html.escape(label)}</div>
+                <div class='mini-value' title='{html.escape(str(value))}'>{html.escape(str(value))}</div>
+                {badge(status)}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
+st.markdown("### Architecture Flow")
 st.markdown(
     """
-    <div class='section-card'>
-        <div class='section-title'>Architecture Flow</div>
-        <div class='section-caption'>How the demo explains enterprise token governance end to end.</div>
-        <div class='flow-grid'>
-    """
-    + flow_step("1. Linux CLI", "Developer or automation starts from devctl.py on a Linux-style endpoint.")
-    + flow_step("2. Entra / IdP", "Production source of user identity, MFA, Conditional Access, and OBO trust.")
-    + flow_step("3. Token Service", "Issues short-lived scoped JWTs, refreshes tokens, step-up tokens, and agent tokens.")
-    + flow_step("4. Device / PKI", "Binds tokens to device or agent certificate proof using cnf.x5t#S256.")
-    + flow_step("5. Internal / GPU API", "Validates signature, audience, scope, sender proof, and GPU quota rules.")
-    + flow_step("6. Audit / SIEM", "Records token issuance, OBO, step-up, agent, and GPU access events.")
-    + """
-        </div>
+    <div class='flow-row'>
+    <b>Linux CLI</b> → <b>Entra ID / IdP</b> → <b>Central Token Service</b> → <b>Device Registry + PKI Proof + Policy</b> → <b>Internal API / GPU Platform</b> → <b>Audit / SIEM</b>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
 with st.sidebar:
-    st.title("Demo Controls")
-    st.markdown(
-        "<div class='sidebar-note'>Run the real demo actions from the terminal. These buttons are visual placeholders so the browser does not execute shell commands.</div>",
-        unsafe_allow_html=True,
-    )
+    st.header("Demo Guide")
+    st.caption("Run commands in the terminal. The dashboard is for visualization and interview explanation.")
     st.divider()
-    st.button("Bootstrap Device Registry")
-    st.button("Login")
-    st.button("GPU Quota Update")
-    st.button("Register Agent")
-    st.button("Agent Comment")
-    st.button("Agent GPU Submit")
+    st.button("Bootstrap Device Registry", disabled=True)
+    st.button("Login", disabled=True)
+    st.button("GPU Quota Update", disabled=True)
+    st.button("Register Agent", disabled=True)
+    st.button("Agent Comment", disabled=True)
+    st.button("Agent GPU Submit", disabled=True)
     if st.button("Refresh Audit"):
         audit_state = load_json(STATE_DIR / "audit.json", [])
-        st.success("Audit state refreshed")
+        st.success("Audit refreshed")
     st.divider()
-    st.caption("Interview tip: show Overview → Token Claims → Agent Identity / NHI → Audit Timeline.")
+    st.markdown("**Best panel flow:**")
+    st.caption("Overview → Token Claims → Agent Identity / NHI → Audit Timeline")
 
 
 overview_tab, trust_tab, claims_tab, agent_tab, gpu_tab, audit_tab = st.tabs(
@@ -273,18 +221,28 @@ overview_tab, trust_tab, claims_tab, agent_tab, gpu_tab, audit_tab = st.tabs(
 with overview_tab:
     st.markdown(
         """
-        <div class='callout'>
-        <b>Panel explanation:</b> This dashboard is the visualization layer. The actual controls are enforced by the token service, CLI, internal API, certificate proof, scopes, and audit flow.
+        <div class='explain-box'>
+        <b>Panel explanation:</b> The dashboard is the visualization layer. The security controls are enforced by the token service, CLI, internal API, certificate proof, scopes, and audit flow.
         </div>
         """,
         unsafe_allow_html=True,
     )
-    left, right = st.columns([1.15, 1])
+    left, right = st.columns([1.05, 1])
     with left:
-        st.subheader("Service Health")
-        st.json({"token_service": ts_health, "internal_api": api_health})
+        st.subheader("What this demo proves")
+        st.markdown(
+            """
+            - Centralized token issuance for Linux developer tooling.
+            - OBO token exchange for downstream internal APIs.
+            - Explicit agent / non-human identity instead of anonymous automation.
+            - GPU access controlled by scopes and quota context.
+            - Audit trail for token, step-up, agent, and GPU activity.
+            """
+        )
+        with st.expander("Service health JSON"):
+            st.json({"token_service": ts_health, "internal_api": api_health})
     with right:
-        st.subheader("Demo Script")
+        st.subheader("Demo commands")
         st.code(
             """python token_service.py
 python internal_api.py
@@ -300,7 +258,7 @@ streamlit run dashboard.py""",
 
 with trust_tab:
     st.subheader("Device Trust Snapshot")
-    st.caption("Local demo device registry. In production this would come from enterprise device identity, managed certificates, or workload identity.")
+    st.caption("Local demo device registry. In production this maps to enterprise device identity, managed certificates, or workload identity.")
     st.json(device_registry)
 
 with claims_tab:
@@ -325,7 +283,7 @@ with claims_tab:
             }
             st.json(selected)
     else:
-        st.info("No .state/devctl_tokens.json access_token found yet. Run `python devctl.py login --auto` first.")
+        st.info("No access token found. Run `python devctl.py login --auto` first.")
 
 with agent_tab:
     st.subheader("Agent / Non-Human Identity Registry")
@@ -345,7 +303,7 @@ with agent_tab:
             )
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
     else:
-        st.info("No .state/agents.json data found. Run `python devctl.py register-agent` first.")
+        st.info("No agent registry data found. Run `python devctl.py register-agent` first.")
 
 with gpu_tab:
     st.subheader("GPU Governance Overview")
@@ -363,7 +321,7 @@ with audit_tab:
     st.subheader("Audit Timeline")
     st.caption("Trace login, token issuance, OBO, refresh, step-up, agent registration, and GPU actions.")
     if not audit_state:
-        st.info("No .state/audit.json data found. Run `python devctl.py audit` after demo commands.")
+        st.info("No audit data found. Run `python devctl.py audit` after demo commands.")
     else:
         rows = []
         for e in audit_state:
