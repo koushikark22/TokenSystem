@@ -158,7 +158,7 @@ class Handler(BaseHTTPRequestHandler):
 
             if p == "/gpu/jobs/submit":
                 c = self.validate(["gpu.job.submit"])
-                ok_posture, reason = posture_allowed_for_action(c, "deploy.prod")
+                ok_posture, reason = posture_allowed_for_action(c, "gpu.job.submit")
                 if not ok_posture:
                     return self.send_json({"error": reason}, 403)
                 actor = actor_from_claims(c)
@@ -176,7 +176,7 @@ class Handler(BaseHTTPRequestHandler):
 
             if p == "/gpu/quota/update":
                 c = self.validate(["gpu.quota.update"], require_pim=True)
-                ok_posture, reason = posture_allowed_for_action(c, "deploy.prod")
+                ok_posture, reason = posture_allowed_for_action(c, "gpu.quota.update")
                 if not ok_posture:
                     return self.send_json({"error": reason}, 403)
                 ok, reason = evaluate_policy("gpu.quota.update", self._policy_context(c, body))
@@ -188,7 +188,7 @@ class Handler(BaseHTTPRequestHandler):
                 c = self.validate(["pr.comment"])
                 if c.get("actor_type") != "agent" or not c.get("agent_id"):
                     return self.send_json({"error": "agent token with explicit agent_id required"}, 403)
-                ok_posture, reason = posture_allowed_for_action(c, "deploy.prod")
+                ok_posture, reason = posture_allowed_for_action(c, "agent.comment")
                 if not ok_posture:
                     return self.send_json({"error": reason}, 403)
                 return self.send_json({"result": "agent comment accepted", "agent_id": c.get("agent_id")})

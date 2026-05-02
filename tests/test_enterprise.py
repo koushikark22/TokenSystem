@@ -103,3 +103,10 @@ def test_user_without_valid_posture_denied_sensitive_actions():
 def test_deploy_prod_requires_allowed_posture():
     claims = {"actor_type": "user", "security_context": {"device_posture_reason": "allowed", "cert_bound": True}}
     assert posture_allowed_for_action(claims, "deploy.prod")[0]
+
+
+def test_route_wiring_uses_correct_action_names():
+    text = Path("internal_api.py").read_text()
+    assert 'posture_allowed_for_action(c, "gpu.job.submit")' in text
+    assert 'posture_allowed_for_action(c, "gpu.quota.update")' in text
+    assert 'posture_allowed_for_action(c, "agent.comment")' in text

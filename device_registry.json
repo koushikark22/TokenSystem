@@ -1,7 +1,7 @@
 {
   "devices": [
     {
-      "cert_thumbprint": "vHm8czBr5CV-ChGXbC0X2TWhRuw7yMjpF1D54npPdgM",
+      "cert_thumbprint": "2Uy_vjE-CO2d1nkgSZjWFxdEXI0SpzINg9TzTbUwmpY",
       "device_id": "linux-laptop-001",
       "disk_encrypted": true,
       "edr_healthy": true,
