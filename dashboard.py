@@ -46,6 +46,16 @@ def decode_jwt_payload(token: str):
         return {}
 
 
+def display_value(value):
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value)
+    if isinstance(value, dict):
+        return json.dumps(value, sort_keys=True)
+    return str(value)
+
+
 def badge(value: str):
     raw_text = str(value or "unknown")
     safe_text = html.escape(raw_text)
@@ -182,15 +192,15 @@ with audit_tab:
         for e in audit_state:
             rows.append(
                 {
-                    "timestamp": e.get("timestamp") or e.get("ts"),
-                    "event_type": e.get("event_type") or e.get("event"),
-                    "actor_type": e.get("actor_type"),
-                    "user": e.get("user") or e.get("sub"),
-                    "agent_id": e.get("agent_id"),
-                    "scope/scopes": e.get("scope") or e.get("scopes"),
-                    "decision": e.get("decision"),
-                    "reason": e.get("reason"),
-                    "correlation_id": e.get("correlation_id"),
+                    "timestamp": display_value(e.get("timestamp") or e.get("ts")),
+                    "event_type": display_value(e.get("event_type") or e.get("event")),
+                    "actor_type": display_value(e.get("actor_type")),
+                    "user": display_value(e.get("user") or e.get("sub")),
+                    "agent_id": display_value(e.get("agent_id")),
+                    "scope/scopes": display_value(e.get("scope") or e.get("scopes")),
+                    "decision": display_value(e.get("decision")),
+                    "reason": display_value(e.get("reason")),
+                    "correlation_id": display_value(e.get("correlation_id")),
                 }
             )
         df = pd.DataFrame(rows)
