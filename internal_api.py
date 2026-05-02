@@ -1,7 +1,7 @@
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
-from token_utils import INTERNAL_API_AUD, decode_and_validate_jwt, has_scopes, validate_sender_constrained_proof
+from token_utils import INTERNAL_API_AUD, decode_and_validate_jwt, decode_cert_header, has_scopes, validate_sender_constrained_proof
 
 GPU_JOBS = []
 GPU_QUOTAS = {"developer01": 2, "agent-gpu-planner-dev": 1}
@@ -14,7 +14,7 @@ def bearer(headers):
 class Handler(BaseHTTPRequestHandler):
     server_version = "InternalAPIGPUDemo/1.0"
     def log_message(self, fmt,*args): print("[internal_api]", fmt % args)
-    def path(self): return urlparse(self.path).path
+    def route_path(self): return urlparse(self.path).path
     def read_json(self):
         n=int(self.headers.get("Content-Length","0") or 0)
         return json.loads(self.rfile.read(n).decode() or "{}") if n else {}
@@ -24,12 +24,12 @@ class Handler(BaseHTTPRequestHandler):
         token=bearer(self.headers)
         if not token: raise PermissionError("missing bearer token")
         c=decode_and_validate_jwt(token, INTERNAL_API_AUD)
-        validate_sender_constrained_proof(c, self.headers.get("X-Client-Cert"), self.headers.get("X-Proof-Signature"), token, self.command, self.path())
+        validate_sender_constrained_proof(c, decode_cert_header(self.headers.get("X-Client-Cert", "")), self.headers.get("X-Proof-Signature"), token, self.command, self.route_path())
         if not has_scopes(c, scopes): raise PermissionError(f"missing required scope {scopes}; token has {c.get('scope')}")
         if require_pim and not c.get("pim"): raise PermissionError("PIM/step-up token required")
         return c
     def do_GET(self):
-        p=self.path()
+        p=self.route_path()
         try:
             if p == "/health": return self.send_json({"status":"ok", "audience": INTERNAL_API_AUD})
             if p == "/build/status":
@@ -40,7 +40,7 @@ class Handler(BaseHTTPRequestHandler):
         except PermissionError as e: return self.send_json({"error":str(e)},403)
         except Exception as e: return self.send_json({"error":str(e)},401)
     def do_POST(self):
-        p=self.path(); body=self.read_json()
+        p=self.route_path(); body=self.read_json()
         try:
             if p == "/deploy/prod":
                 c=self.validate(["deploy.prod"], require_pim=True); return self.send_json({"result":"production deployment accepted", "user":c.get("sub"), "approval_id":c.get("approval_id"), "auth_strength":c.get("auth_strength")})

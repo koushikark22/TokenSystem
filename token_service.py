@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from token_utils import (
     AGENT_CERT_PATH, AGENT_TOKEN_TTL_SECONDS, ACCESS_TOKEN_TTL_SECONDS, DEVICE_CERT_PATH, INTERNAL_API_AUD,
     ISSUER, REFRESH_TOKEN_TTL_SECONDS, STEP_UP_TOKEN_TTL_SECONDS, TOKEN_SERVICE_AUD,
-    cert_thumbprint_sha256_pem, cert_to_pem_string, decode_and_validate_jwt, issue_jwt, json_load, json_save,
+    cert_thumbprint_sha256_pem, cert_to_pem_string, decode_and_validate_jwt, decode_cert_header, issue_jwt, json_load, json_save,
     jwks, now, scopes_from_claims, STATE_DIR, validate_sender_constrained_proof
 )
 
@@ -47,9 +47,9 @@ class Handler(BaseHTTPRequestHandler):
     def send_json(self, data, status=200):
         raw = json.dumps(data, indent=2).encode()
         self.send_response(status); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(raw))); self.end_headers(); self.wfile.write(raw)
-    def path(self): return urlparse(self.path).path
+    def route_path(self): return urlparse(self.path).path
     def do_GET(self):
-        p = self.path()
+        p = self.route_path()
         try:
             if p == "/.well-known/jwks.json": return self.send_json(jwks())
             if p == "/audit": return self.send_json(db(AUDIT_DB, []))
@@ -57,7 +57,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"error":"not found"}, 404)
         except Exception as e: return self.send_json({"error": str(e)}, 500)
     def do_POST(self):
-        p = self.path(); body = self.read_json()
+        p = self.route_path(); body = self.read_json()
         try:
             if p == "/device/start": return self.device_start(body)
             if p == "/device/complete": return self.device_complete(body)
@@ -124,7 +124,7 @@ class Handler(BaseHTTPRequestHandler):
         incoming = bearer(self.headers); requested = body.get("scopes", ["build.read"]); target_aud = body.get("audience", INTERNAL_API_AUD)
         try:
             claims = decode_and_validate_jwt(incoming, TOKEN_SERVICE_AUD)
-            validate_sender_constrained_proof(claims, self.headers.get("X-Client-Cert"), self.headers.get("X-Proof-Signature"), incoming, "POST", "/obo/exchange")
+            validate_sender_constrained_proof(claims, decode_cert_header(self.headers.get("X-Client-Cert", "")), self.headers.get("X-Proof-Signature"), incoming, "POST", "/obo/exchange")
             if "obo.exchange" not in scopes_from_claims(claims): raise ValueError("missing obo.exchange scope")
             allowed = scopes_from_claims(claims)
             if not set(requested).issubset(allowed): raise ValueError("requested OBO scopes exceed user/client grant")
@@ -136,7 +136,7 @@ class Handler(BaseHTTPRequestHandler):
         incoming = bearer(self.headers); requested = body.get("scopes", ["deploy.prod"]); audience = body.get("audience", INTERNAL_API_AUD)
         try:
             claims = decode_and_validate_jwt(incoming, TOKEN_SERVICE_AUD)
-            validate_sender_constrained_proof(claims, self.headers.get("X-Client-Cert"), self.headers.get("X-Proof-Signature"), incoming, "POST", "/stepup")
+            validate_sender_constrained_proof(claims, decode_cert_header(self.headers.get("X-Client-Cert", "")), self.headers.get("X-Proof-Signature"), incoming, "POST", "/stepup")
             token = issue_jwt(subject=claims["sub"], audience=audience, client_id="central-token-service-stepup", scopes=requested, actor_type="user", ttl_seconds=STEP_UP_TOKEN_TTL_SECONDS, cnf_x5t=(claims.get("cnf") or {}).get("x5t#S256"), extra_claims={"pim": True, "auth_strength":"step_up_mfa", "approval_id": f"APR-{secrets.token_hex(4).upper()}", "reason": body.get("reason", "privileged operation"), "device_id": claims.get("device_id")})
             audit("stepup_token_issued", user=claims["sub"], scopes=requested); return self.send_json({"access_token": token, "token_type":"Bearer", "expires_in": STEP_UP_TOKEN_TTL_SECONDS})
         except Exception as e: audit("stepup_failed", reason=str(e)); return self.send_json({"error": str(e)}, 401)
@@ -146,7 +146,7 @@ class Handler(BaseHTTPRequestHandler):
         save(AGENT_DB, agents); audit("agent_registered", agent_id=agent_id, scopes=agents[agent_id]["allowed_scopes"]); return self.send_json(agents[agent_id])
     def agent_token(self, body):
         from token_utils import verify_proof
-        agent_id = body.get("agent_id"); requested = body.get("scopes", ["pr.comment"]); cert_pem = self.headers.get("X-Client-Cert"); proof_sig = self.headers.get("X-Proof-Signature"); proof_token = body.get("proof_token", "agent-token-proof")
+        agent_id = body.get("agent_id"); requested = body.get("scopes", ["pr.comment"]); cert_pem = decode_cert_header(self.headers.get("X-Client-Cert", "")); proof_sig = self.headers.get("X-Proof-Signature"); proof_token = body.get("proof_token", "agent-token-proof")
         agents = db(AGENT_DB, {}); agent = agents.get(agent_id)
         if not agent or agent.get("status") != "active": return self.send_json({"error":"agent is not registered/active"}, 404)
         try:

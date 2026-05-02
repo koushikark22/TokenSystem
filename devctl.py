@@ -11,6 +11,7 @@ from token_utils import (
     INTERNAL_API_AUD,
     TOKEN_SERVICE_AUD,
     cert_to_pem_string,
+    encode_cert_header,
     json_load,
     json_save,
     sign_proof,
@@ -39,7 +40,7 @@ def proof_headers(access_token: str, method: str, path: str, *, agent: bool = Fa
     key_path = AGENT_KEY_PATH if agent else DEVICE_KEY_PATH
     return {
         "Authorization": f"Bearer {access_token}",
-        "X-Client-Cert": cert_to_pem_string(cert_path),
+        "X-Client-Cert": encode_cert_header(cert_to_pem_string(cert_path)),
         "X-Proof-Signature": sign_proof(key_path, access_token, method, path),
     }
 
@@ -163,7 +164,7 @@ def register_agent(args):
 def agent_token(scopes):
     proof_token = "agent-token-proof"
     headers = {
-        "X-Client-Cert": cert_to_pem_string(AGENT_CERT_PATH),
+        "X-Client-Cert": encode_cert_header(cert_to_pem_string(AGENT_CERT_PATH)),
         "X-Proof-Signature": sign_proof(AGENT_KEY_PATH, proof_token, "POST", "/agent/token"),
     }
     r = requests.post(f"{TOKEN_URL}/agent/token", headers=headers, json={
