@@ -1,70 +1,203 @@
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
-from token_utils import INTERNAL_API_AUD, decode_and_validate_jwt, decode_cert_header, has_scopes, validate_sender_constrained_proof
+
+from device_registry import check_device_posture
+from policy_engine import evaluate_policy
+from quota_manager import QuotaManager
+from rate_limiter import InMemoryRateLimiter
+from token_utils import (
+    INTERNAL_API_AUD,
+    cert_thumbprint_sha256_pem,
+    decode_and_validate_jwt,
+    decode_cert_header,
+    has_scopes,
+    validate_sender_constrained_proof,
+)
 
 GPU_JOBS = []
 GPU_QUOTAS = {"developer01": 2, "agent-gpu-planner-dev": 1}
+RL = InMemoryRateLimiter(limit=120, window_seconds=60)
+QM = QuotaManager(GPU_QUOTAS)
 
-def actor_from_claims(c): return c.get("agent_id", c.get("sub")) if c.get("actor_type") == "agent" else c.get("sub")
+
+def actor_from_claims(c):
+    return c.get("agent_id", c.get("sub")) if c.get("actor_type") == "agent" else c.get("sub")
+
+
 def bearer(headers):
     a = headers.get("Authorization", "")
-    return a.split(" ",1)[1] if a.startswith("Bearer ") else None
+    return a.split(" ", 1)[1] if a.startswith("Bearer ") else None
+
+
+def posture_allowed_for_action(claims, action):
+    sec = claims.get("security_context", {})
+    reason = sec.get("device_posture_reason")
+    if claims.get("actor_type") != "agent":
+        return reason == "allowed", reason
+
+    # Agent delegated actions may run without explicit device context
+    # when identity is strongly bound to agent certificate and user delegation.
+    if action in {"agent.comment", "gpu.job.submit"}:
+        if reason == "allowed":
+            return True, reason
+        if reason == "no_device_context" and claims.get("agent_id") and sec.get("cert_bound") and claims.get("initiating_user"):
+            return True, reason
+    return False, reason
+
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "InternalAPIGPUDemo/1.0"
-    def log_message(self, fmt,*args): print("[internal_api]", fmt % args)
-    def route_path(self): return urlparse(self.path).path
+    server_version = "InternalAPIGPUDemo/2.1"
+
+    def log_message(self, fmt, *args):
+        print("[internal_api]", fmt % args)
+
+    def route_path(self):
+        return urlparse(self.path).path
+
     def read_json(self):
-        n=int(self.headers.get("Content-Length","0") or 0)
+        n = int(self.headers.get("Content-Length", "0") or 0)
         return json.loads(self.rfile.read(n).decode() or "{}") if n else {}
-    def send_json(self,data,status=200):
-        raw=json.dumps(data,indent=2).encode(); self.send_response(status); self.send_header("Content-Type","application/json"); self.send_header("Content-Length",str(len(raw))); self.end_headers(); self.wfile.write(raw)
+
+    def send_json(self, data, status=200):
+        raw = json.dumps(data, indent=2).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
     def validate(self, scopes, require_pim=False):
-        token=bearer(self.headers)
-        if not token: raise PermissionError("missing bearer token")
-        c=decode_and_validate_jwt(token, INTERNAL_API_AUD)
-        validate_sender_constrained_proof(c, decode_cert_header(self.headers.get("X-Client-Cert", "")), self.headers.get("X-Proof-Signature"), token, self.command, self.route_path())
-        if not has_scopes(c, scopes): raise PermissionError(f"missing required scope {scopes}; token has {c.get('scope')}")
-        if require_pim and not c.get("pim"): raise PermissionError("PIM/step-up token required")
-        return c
-    def do_GET(self):
-        p=self.route_path()
+        token = bearer(self.headers)
+        if not token:
+            raise PermissionError("missing bearer token")
+
+        claims = decode_and_validate_jwt(token, INTERNAL_API_AUD)
+        cert_pem = decode_cert_header(self.headers.get("X-Client-Cert", "")) if self.headers.get("X-Client-Cert") else ""
+        computed_thumbprint = cert_thumbprint_sha256_pem(cert_pem) if cert_pem else None
+
         try:
-            if p == "/health": return self.send_json({"status":"ok", "audience": INTERNAL_API_AUD})
+            validate_sender_constrained_proof(
+                claims,
+                cert_pem,
+                self.headers.get("X-Proof-Signature"),
+                token,
+                self.command,
+                self.route_path(),
+                dev_header_thumbprint=self.headers.get("X-Cert-Thumbprint"),
+            )
+            cert_bound = True
+        except Exception as e:
+            raise PermissionError(str(e))
+
+        if not has_scopes(claims, scopes):
+            raise PermissionError(f"missing required scope {scopes}; token has {claims.get('scope')}")
+        if require_pim and not claims.get("pim"):
+            raise PermissionError("PIM/step-up token required")
+
+        device_id = claims.get("device_id")
+        posture_ok, posture_reason = (True, "no_device_context")
+        if device_id and computed_thumbprint:
+            posture_ok, posture_reason = check_device_posture(device_id, computed_thumbprint)
+
+        claims["security_context"] = {
+            "cert_bound": cert_bound,
+            "device_managed": posture_ok,
+            "device_posture_reason": posture_reason,
+            "computed_cert_thumbprint": computed_thumbprint,
+            "device_id": device_id,
+        }
+        return claims
+
+    def _policy_context(self, claims, body):
+        sec = claims.get("security_context", {})
+        return {
+            "actor_type": claims.get("actor_type"),
+            "user": claims.get("sub"),
+            "agent_id": claims.get("agent_id"),
+            "initiating_user": claims.get("initiating_user"),
+            "device_id": sec.get("device_id"),
+            "device_managed": sec.get("device_managed"),
+            "cert_bound": sec.get("cert_bound"),
+            "scope": claims.get("scope"),
+            "audience": claims.get("aud"),
+            "gpu_count": int(body.get("gpu_count", 1)),
+            "pim": claims.get("pim"),
+            "step_up_mfa": claims.get("auth_strength") == "step_up_mfa",
+            "approval_id": claims.get("approval_id"),
+            "ticket_id": claims.get("ticket_id"),
+        }
+
+    def do_GET(self):
+        p = self.route_path()
+        try:
+            if p == "/health": return self.send_json({"status": "ok", "audience": INTERNAL_API_AUD})
             if p == "/build/status":
-                c=self.validate(["build.read"]); return self.send_json({"status":"green", "message":"Build system access allowed using OBO downstream token.", "user":c.get("sub"), "obo":c.get("obo",False), "device_id":c.get("device_id"), "scopes":c.get("scope")})
+                c = self.validate(["build.read"])
+                return self.send_json({"status": "green", "user": c.get("sub")})
             if p == "/gpu/jobs":
-                c=self.validate(["gpu.job.read"]); return self.send_json({"gpu_jobs":GPU_JOBS,"requested_by":actor_from_claims(c),"actor_type":c.get("actor_type")})
-            return self.send_json({"error":"not found"},404)
-        except PermissionError as e: return self.send_json({"error":str(e)},403)
-        except Exception as e: return self.send_json({"error":str(e)},401)
+                c = self.validate(["gpu.job.read"])
+                return self.send_json({"gpu_jobs": GPU_JOBS, "requested_by": actor_from_claims(c)})
+            return self.send_json({"error": "not found"}, 404)
+        except PermissionError as e:
+            return self.send_json({"error": str(e)}, 403)
+        except Exception as e:
+            return self.send_json({"error": str(e)}, 401)
+
     def do_POST(self):
-        p=self.route_path(); body=self.read_json()
+        p = self.route_path(); body = self.read_json()
         try:
             if p == "/deploy/prod":
-                c=self.validate(["deploy.prod"], require_pim=True); return self.send_json({"result":"production deployment accepted", "user":c.get("sub"), "approval_id":c.get("approval_id"), "auth_strength":c.get("auth_strength")})
+                c = self.validate(["deploy.prod"], require_pim=True)
+                ok_posture, reason = posture_allowed_for_action(c, "deploy.prod")
+                if not ok_posture:
+                    return self.send_json({"error": reason}, 403)
+                ok, reason = evaluate_policy("deploy.prod", self._policy_context(c, body))
+                if not ok: return self.send_json({"error": reason}, 403)
+                return self.send_json({"result": "production deployment accepted", "user": c.get("sub")})
+
             if p == "/gpu/jobs/submit":
-                c=self.validate(["gpu.job.submit"]); actor=actor_from_claims(c); active=[j for j in GPU_JOBS if j["owner"]==actor and j["state"] in {"queued","running"}]
-                max_jobs=int(c.get("gpu_quota_max_jobs") or GPU_QUOTAS.get(actor, GPU_QUOTAS.get(c.get("sub"),1)))
-                if len(active) >= max_jobs: return self.send_json({"error":"GPU quota exceeded", "actor":actor, "max_jobs":max_jobs},429)
-                job={"job_id":f"gpu-job-{len(GPU_JOBS)+1:04d}","owner":actor,"actor_type":c.get("actor_type"),"initiating_user":c.get("initiating_user",c.get("sub")),"model":body.get("model","demo-transformer"),"dataset":body.get("dataset","synthetic-dev-data"),"gpu_count":int(body.get("gpu_count",1)),"state":"queued","scope":c.get("scope")}
-                GPU_JOBS.append(job); return self.send_json({"result":"GPU job submitted","job":job})
-            if p == "/gpu/jobs/cancel":
-                self.validate(["gpu.job.cancel"]); job_id=body.get("job_id")
-                for job in GPU_JOBS:
-                    if job["job_id"] == job_id: job["state"]="cancelled"; return self.send_json({"result":"GPU job cancelled","job":job})
-                return self.send_json({"error":"job not found"},404)
+                c = self.validate(["gpu.job.submit"])
+                ok_posture, reason = posture_allowed_for_action(c, "gpu.job.submit")
+                if not ok_posture:
+                    return self.send_json({"error": reason}, 403)
+                actor = actor_from_claims(c)
+                for key in [f"user:{c.get('sub')}", f"device:{c.get('device_id')}", f"agent:{c.get('agent_id')}", "scope:gpu.job.submit"]:
+                    ok, reason = RL.allow(key)
+                    if not ok: return self.send_json({"error": reason, "key": key}, 429)
+                ok, reason = evaluate_policy("gpu.job.submit", self._policy_context(c, body))
+                if not ok: return self.send_json({"error": reason}, 403)
+                active = [j for j in GPU_JOBS if j["owner"] == actor and j["state"] in {"queued", "running"}]
+                qok, qreason, limit = QM.allow_gpu(actor, len(active))
+                if not qok: return self.send_json({"error": qreason, "actor": actor, "max_jobs": limit}, 429)
+                job = {"job_id": f"gpu-job-{len(GPU_JOBS)+1:04d}", "owner": actor, "model": body.get("model", "demo-transformer"), "dataset": body.get("dataset", "synthetic-dev-data"), "gpu_count": int(body.get("gpu_count", 1)), "state": "queued"}
+                GPU_JOBS.append(job)
+                return self.send_json({"result": "GPU job submitted", "job": job})
+
             if p == "/gpu/quota/update":
-                c=self.validate(["gpu.quota.update"], require_pim=True); subject=body.get("subject","developer01"); quota=int(body.get("quota",3)); GPU_QUOTAS[subject]=quota
-                return self.send_json({"result":"GPU quota updated","subject":subject,"quota":quota,"approved_by":c.get("sub"),"approval_id":c.get("approval_id")})
+                c = self.validate(["gpu.quota.update"], require_pim=True)
+                ok_posture, reason = posture_allowed_for_action(c, "gpu.quota.update")
+                if not ok_posture:
+                    return self.send_json({"error": reason}, 403)
+                ok, reason = evaluate_policy("gpu.quota.update", self._policy_context(c, body))
+                if not ok: return self.send_json({"error": reason}, 403)
+                subject = body.get("subject", "developer01"); quota = int(body.get("quota", 3)); GPU_QUOTAS[subject] = quota
+                return self.send_json({"result": "GPU quota updated", "subject": subject, "quota": quota})
+
             if p == "/agent/comment":
-                c=self.validate(["pr.comment"])
-                if c.get("actor_type") != "agent" or not c.get("agent_id"): return self.send_json({"error":"agent token with explicit agent_id required"},403)
-                return self.send_json({"result":"agent comment accepted","agent_id":c.get("agent_id"),"agent_owner":c.get("agent_owner"),"initiating_user":c.get("initiating_user"),"audit_context":{"actor_type":c.get("actor_type"),"scope":c.get("scope"),"environment":c.get("environment")}})
-            return self.send_json({"error":"not found"},404)
-        except PermissionError as e: return self.send_json({"error":str(e)},403)
-        except Exception as e: return self.send_json({"error":str(e)},401)
+                c = self.validate(["pr.comment"])
+                if c.get("actor_type") != "agent" or not c.get("agent_id"):
+                    return self.send_json({"error": "agent token with explicit agent_id required"}, 403)
+                ok_posture, reason = posture_allowed_for_action(c, "agent.comment")
+                if not ok_posture:
+                    return self.send_json({"error": reason}, 403)
+                return self.send_json({"result": "agent comment accepted", "agent_id": c.get("agent_id")})
+            return self.send_json({"error": "not found"}, 404)
+        except PermissionError as e:
+            return self.send_json({"error": str(e)}, 403)
+        except Exception as e:
+            return self.send_json({"error": str(e)}, 401)
+
 
 if __name__ == "__main__":
     print("Protected internal API/GPU API running on http://127.0.0.1:9000")
