@@ -57,6 +57,15 @@ def cert_to_pem_string(path: Path) -> str:
     return path.read_text()
 
 
+def encode_cert_header(cert_pem: str) -> str:
+    return b64url(cert_pem.encode("utf-8"))
+
+
+def decode_cert_header(header_value: str) -> str:
+    padded = header_value + "=" * (-len(header_value) % 4)
+    return base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+
+
 def rsa_public_jwk_from_cert(cert_path: Path, kid: str = "token-signing-rsa-1") -> Dict[str, str]:
     cert = load_public_cert(cert_path)
     pub = cert.public_key()
