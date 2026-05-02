@@ -1,56 +1,44 @@
-# Entra-Style Centralized Token Service Demo for Linux CLI + OBO + PKI + Agentic AI + GPU
+# Centralized Token Service Demo (Linux CLI, OBO, PKI, and GPU API Controls)
 
-This project is a working local demo of a centralized token system for Linux developer machines and NVIDIA-style GPU workflows.
+This repository is a personal proof-of-concept showing how a centralized token service can secure internal APIs used by Linux developer tooling and automated agents.
 
-It demonstrates:
+The implementation is centered on identity architecture controls:
 
-- Linux developer CLI authentication without long-lived API keys or personal tokens
-- Entra-style Device Code / PKCE architecture, simulated locally for demo purposes
-- Short-lived JWT access tokens
-- JWKS endpoint for local API validation
-- Refresh-token rotation and reuse detection
-- OBO / On-Behalf-Of flow to preserve original user context across backend calls
-- PIM/step-up style privileged access
-- Corporate PKI-style device certificates for Linux machine trust
-- PKCS#12 `.p12` bundles for certificate import workflows
-- Sender-constrained tokens using `cnf.x5t#S256`
-- Agentic AI tokens with explicit `agent_id`, `actor_type`, `agent_owner`, `initiating_user`, and scopes
-- GPU-specific protected APIs, least-privilege scopes, and quota controls
+- short-lived JWT access tokens
+- refresh-token rotation with reuse detection
+- OBO (on-behalf-of) exchange for downstream APIs
+- scoped authorization for internal and GPU endpoints
+- step-up tokens for privileged operations
+- sender-constrained tokens with certificate thumbprint binding (`cnf.x5t#S256`)
+- explicit agent identities (`agent_id`) and audit context
+- Zero Trust-style verification at each hop (identity, device proof, scope, and audience checks)
+- audit logging for authentication, token, and authorization events
+- JWKS publication for verifier services
 
-> This is a local interview demo. In production, Entra ID would handle real user authentication, MFA, Conditional Access, PIM, risk signals, and app registration.
+> Note: This is a local demonstration. In production, an enterprise IdP and security platform would provide user authentication, MFA, risk and policy enforcement, and lifecycle governance.
 
 ---
 
-## Why this solves the interview problem
+## Repository layout
 
-Developers and AI agents should not use static API keys, shared service accounts, or anonymous tokens to access internal systems. This design replaces those with a centralized token service that enforces identity, device trust, token expiry, refresh rotation, scopes, OBO, agent identity, and audit logging.
-
-For NVIDIA-style workflows, GPU resources are treated as high-value infrastructure. Developers and agents need explicit scopes such as:
-
-- `gpu.job.read`
-- `gpu.job.submit`
-- `gpu.job.cancel`
-- `gpu.quota.update`
-- `gpu.cluster.admin`
-
-Low-risk GPU job submission can use normal scoped tokens. High-risk GPU quota/admin operations require PIM/step-up.
+- `token_service.py` — centralized token service APIs (device flow simulation, token issuance, refresh, OBO, step-up, agent token issuance)
+- `internal_api.py` — protected internal and GPU-oriented API endpoints
+- `devctl.py` — CLI driver used to demonstrate end-to-end flows
+- `token_utils.py` — JWT signing/validation, cert thumbprints, proof signing/verification helpers
+- `pki_bootstrap.py` — local PKI artifact bootstrap for demo certificates/keys
+- `requirements.txt` — Python dependencies
 
 ---
 
-## Files
+## Prerequisites
 
-- `pki_bootstrap.py` - creates demo CA, Linux device cert, agent cert, token signing cert, and PKCS#12 bundles
-- `token_service.py` - centralized token service
-- `internal_api.py` - protected internal API and GPU scheduler API
-- `devctl.py` - Linux developer CLI demo
-- `token_utils.py` - JWT, JWKS, PKI proof, and helper functions
-- `requirements.txt` - Python dependencies
+- Linux or WSL
+- Python 3.10+
+- `pip`
 
 ---
 
-## Setup
-
-Use Linux or WSL Ubuntu on Windows.
+## Quick start
 
 ```bash
 python3 -m venv .venv
@@ -59,47 +47,23 @@ pip install -r requirements.txt
 python pki_bootstrap.py
 ```
 
-This creates:
+Then start services in separate terminals:
 
-```text
-pki/ca.cert.pem
-pki/linux-laptop-001.cert.pem
-pki/linux-laptop-001.key.pem
-pki/linux-laptop-001.p12
-pki/agent-gpu-planner-dev.cert.pem
-pki/agent-gpu-planner-dev.key.pem
-pki/agent-gpu-planner-dev.p12
-pki/token-signing.cert.pem
-pki/token-signing.key.pem
-```
-
-PKCS#12 demo password: `changeit`
-
----
-
-## Run
-
-Open three terminals.
-
-### Terminal 1 - token service
+### Terminal 1: token service
 
 ```bash
 source .venv/bin/activate
 python token_service.py
 ```
 
-Runs on `http://127.0.0.1:8000`.
-
-### Terminal 2 - protected internal/GPU API
+### Terminal 2: protected API
 
 ```bash
 source .venv/bin/activate
 python internal_api.py
 ```
 
-Runs on `http://127.0.0.1:9000`.
-
-### Terminal 3 - CLI tests
+### Terminal 3: run demo flows
 
 ```bash
 source .venv/bin/activate
@@ -118,111 +82,49 @@ python devctl.py audit
 
 ---
 
-## What each command proves
+## Demo flow mapping
 
-### `python devctl.py login --auto`
-
-Simulates Linux CLI login using an Entra-style flow. The Linux machine proves possession of its private key. The token service issues a short-lived access token and rotating refresh token.
-
-Interview line:
-
-> This replaces long-lived API keys on Linux developer machines with short-lived, certificate-bound tokens.
-
-### `python devctl.py obo-build`
-
-Shows OBO flow. The CLI has a token for the token service; the token service exchanges it for a downstream internal API token while preserving original user context.
-
-Interview line:
-
-> OBO preserves the original developer identity across backend-to-backend calls.
-
-### `python devctl.py gpu-submit`
-
-Submits a GPU job using an OBO token with `gpu.job.submit` scope.
-
-Interview line:
-
-> GPU job submission is authorized through least-privilege scopes instead of broad static credentials.
-
-### `python devctl.py gpu-jobs`
-
-Reads GPU jobs using `gpu.job.read` scope.
-
-### `python devctl.py refresh`
-
-Rotates the refresh token. The old refresh token becomes invalid. Reuse of an old refresh token would revoke the token family.
-
-Interview line:
-
-> Refresh tokens are single-use; reuse indicates possible theft and triggers token-family revocation.
-
-### `python devctl.py deploy-prod`
-
-Requests step-up/PIM-style privileged scope `deploy.prod` and calls a protected production endpoint.
-
-Interview line:
-
-> Normal commands use normal scopes; production commands require step-up and short-lived elevated tokens.
-
-### `python devctl.py gpu-quota-update --subject developer01 --quota 3`
-
-Requests PIM/step-up for high-risk GPU admin action `gpu.quota.update`.
-
-Interview line:
-
-> GPU quota and admin changes are high-risk and cost-sensitive, so they require step-up and full audit.
-
-### `python devctl.py register-agent`
-
-Registers an AI agent as a first-class identity with explicit `agent_id`, owner, environment, scopes, certificate binding, and GPU quota.
-
-### `python devctl.py agent-comment`
-
-Agent receives a token with explicit identity claims and calls an API.
-
-### `python devctl.py agent-gpu-submit`
-
-Agent submits a GPU job using its own `agent_id`, certificate-bound token, GPU scope, and quota policy.
-
-Interview line:
-
-> The AI agent is not anonymous. The token and audit log show agent ID, owner, initiating user, scopes, and GPU job details.
+- `login --auto`: simulates interactive sign-in completion and issues short-lived access + rotating refresh tokens.
+- `obo-build`: exchanges a user token for a downstream API token while preserving the user context.
+- `gpu-submit` / `gpu-jobs`: demonstrates least-privilege GPU scopes.
+- `refresh`: demonstrates one-time refresh token usage and token family revocation on reuse.
+- `deploy-prod` and `gpu-quota-update`: demonstrates step-up requirements for privileged actions.
+- `register-agent`, `agent-comment`, `agent-gpu-submit`: demonstrates non-anonymous agent identity and auditable actions.
 
 ---
 
-## Architecture explanation
+## Architecture (unchanged)
 
 ```text
-Developer on Linux CLI
+Developer CLI / Agent Runtime
         |
-        | Entra-style login + Linux cert proof
+        | login + proof of key possession
         v
 Centralized Token Service
-        |  short-lived JWT / refresh rotation / OBO / step-up / agent tokens
+        | short-lived JWT, refresh rotation, OBO, step-up, agent claims
         v
-Protected API / GPU Scheduler API
-        |  validates JWT, JWKS, scopes, audience, cert proof
+Protected Internal API / GPU API
+        | JWT, scope, audience, and sender-proof validation
         v
-Internal services, GPU clusters, build systems, model workflows
+Internal services and GPU workloads
 ```
 
 ---
 
-## Production changes
+## Production considerations
 
-For production, replace the simulated parts with:
+For a production implementation, common hardening steps include:
 
-- Real Microsoft Entra ID Device Code Flow or Authorization Code + PKCE
-- Entra MFA, Conditional Access, PIM, and Identity Protection
-- Intune/MDM/EDR device compliance for Linux posture
-- HSM/Key Vault for token signing keys
-- Durable database for refresh tokens, agent registry, revocation, and audit events
-- SIEM integration
-- Regional HA, rate limiting, monitoring, alerting, and runbooks
-- Automated certificate lifecycle management for Linux devices and agent runtimes
+- integrate a real enterprise IdP flow (Device Code or Auth Code + PKCE)
+- enforce MFA and conditional access policies
+- persist token/agent/audit state in a durable datastore
+- protect signing keys with HSM/KMS-backed key management
+- add centralized audit export and alerting (SIEM)
+- implement stronger operational controls (rotation, backup, incident response)
+- add comprehensive automated testing and CI policy checks
 
 ---
 
-## Panel-ready summary
+## Interview framing
 
-> I designed a centralized token system for Linux developer CLI and agentic AI workflows. Entra remains the IdP for authentication, MFA, Conditional Access, and PIM. The custom token service standardizes internal access by issuing short-lived JWTs, rotating refresh tokens, supporting OBO, enforcing scopes, publishing JWKS, and logging audit events. PKI binds tokens to trusted Linux devices and agent runtimes, reducing replay risk. GPU scheduler APIs are protected with GPU-specific scopes and quota controls. AI agents have explicit `agent_id`, owner, initiating user, certificate binding, and least-privilege scopes, so their actions are attributable, revocable, and auditable.
+This project is intentionally small and explainable: it demonstrates identity-bound API access without introducing unnecessary architecture complexity. It is suited for discussing security tradeoffs, threat reduction, and practical authorization design in backend systems.

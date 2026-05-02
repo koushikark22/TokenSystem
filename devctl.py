@@ -51,7 +51,7 @@ def login(args):
     print(data["message"])
     if not args.auto:
         input("Press Enter after completing browser login. For demo use --auto. ")
-    # Auto-complete simulated Entra login using Linux device certificate proof.
+    # Simulate browser-completed login and bind issuance to device key possession proof.
     proof_token = "device-login-proof"
     complete_payload = {
         "user_code": data["user_code"],

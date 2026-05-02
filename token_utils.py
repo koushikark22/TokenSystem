@@ -80,7 +80,9 @@ def jwks() -> Dict[str, Any]:
 def sign_jwt(claims: Dict[str, Any]) -> str:
     key = load_private_key(SIGNING_KEY_PATH)
     header = {"alg": "RS256", "typ": "JWT", "kid": "token-signing-rsa-1"}
-    signing_input = f"{b64url(json.dumps(header, separators=(",", ":")).encode())}.{b64url(json.dumps(claims, separators=(",", ":")).encode())}"
+    header_b64 = b64url(json.dumps(header, separators=(",", ":")).encode())
+    claims_b64 = b64url(json.dumps(claims, separators=(",", ":")).encode())
+    signing_input = f"{header_b64}.{claims_b64}"
     signature = key.sign(signing_input.encode(), padding.PKCS1v15(), hashes.SHA256())
     return f"{signing_input}.{b64url(signature)}"
 
