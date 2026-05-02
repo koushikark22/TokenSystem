@@ -30,6 +30,22 @@ def bearer(headers):
     return a.split(" ", 1)[1] if a.startswith("Bearer ") else None
 
 
+def posture_allowed_for_action(claims, action):
+    sec = claims.get("security_context", {})
+    reason = sec.get("device_posture_reason")
+    if claims.get("actor_type") != "agent":
+        return reason == "allowed", reason
+
+    # Agent delegated actions may run without explicit device context
+    # when identity is strongly bound to agent certificate and user delegation.
+    if action in {"agent.comment", "gpu.job.submit"}:
+        if reason == "allowed":
+            return True, reason
+        if reason == "no_device_context" and claims.get("agent_id") and sec.get("cert_bound") and claims.get("initiating_user"):
+            return True, reason
+    return False, reason
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "InternalAPIGPUDemo/2.1"
 
@@ -133,16 +149,18 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if p == "/deploy/prod":
                 c = self.validate(["deploy.prod"], require_pim=True)
-                if c["security_context"]["device_posture_reason"] != "allowed":
-                    return self.send_json({"error": c["security_context"]["device_posture_reason"]}, 403)
+                ok_posture, reason = posture_allowed_for_action(c, "deploy.prod")
+                if not ok_posture:
+                    return self.send_json({"error": reason}, 403)
                 ok, reason = evaluate_policy("deploy.prod", self._policy_context(c, body))
                 if not ok: return self.send_json({"error": reason}, 403)
                 return self.send_json({"result": "production deployment accepted", "user": c.get("sub")})
 
             if p == "/gpu/jobs/submit":
                 c = self.validate(["gpu.job.submit"])
-                if c["security_context"]["device_posture_reason"] != "allowed":
-                    return self.send_json({"error": c["security_context"]["device_posture_reason"]}, 403)
+                ok_posture, reason = posture_allowed_for_action(c, "deploy.prod")
+                if not ok_posture:
+                    return self.send_json({"error": reason}, 403)
                 actor = actor_from_claims(c)
                 for key in [f"user:{c.get('sub')}", f"device:{c.get('device_id')}", f"agent:{c.get('agent_id')}", "scope:gpu.job.submit"]:
                     ok, reason = RL.allow(key)
@@ -158,8 +176,9 @@ class Handler(BaseHTTPRequestHandler):
 
             if p == "/gpu/quota/update":
                 c = self.validate(["gpu.quota.update"], require_pim=True)
-                if c["security_context"]["device_posture_reason"] != "allowed":
-                    return self.send_json({"error": c["security_context"]["device_posture_reason"]}, 403)
+                ok_posture, reason = posture_allowed_for_action(c, "deploy.prod")
+                if not ok_posture:
+                    return self.send_json({"error": reason}, 403)
                 ok, reason = evaluate_policy("gpu.quota.update", self._policy_context(c, body))
                 if not ok: return self.send_json({"error": reason}, 403)
                 subject = body.get("subject", "developer01"); quota = int(body.get("quota", 3)); GPU_QUOTAS[subject] = quota
@@ -169,8 +188,9 @@ class Handler(BaseHTTPRequestHandler):
                 c = self.validate(["pr.comment"])
                 if c.get("actor_type") != "agent" or not c.get("agent_id"):
                     return self.send_json({"error": "agent token with explicit agent_id required"}, 403)
-                if c["security_context"]["device_posture_reason"] != "allowed":
-                    return self.send_json({"error": c["security_context"]["device_posture_reason"]}, 403)
+                ok_posture, reason = posture_allowed_for_action(c, "deploy.prod")
+                if not ok_posture:
+                    return self.send_json({"error": reason}, 403)
                 return self.send_json({"result": "agent comment accepted", "agent_id": c.get("agent_id")})
             return self.send_json({"error": "not found"}, 404)
         except PermissionError as e:

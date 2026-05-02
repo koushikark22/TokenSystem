@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
 import token_utils
+from internal_api import posture_allowed_for_action
 from device_registry import bootstrap_device_registry, check_device_posture
 from policy_engine import evaluate_policy
 
@@ -79,3 +80,26 @@ def test_agent_token_claims_include_actor_fields():
     token = token_utils.issue_jwt(subject="agent:agent-gpu-planner-dev", audience=token_utils.INTERNAL_API_AUD, client_id="agent-runtime", scopes=["pr.comment"], actor_type="agent", cnf_x5t="thumb", extra_claims={"agent_id": "agent-gpu-planner-dev", "initiating_user": "developer01"})
     claims = token_utils.decode_and_validate_jwt(token, token_utils.INTERNAL_API_AUD)
     assert claims["agent_id"] == "agent-gpu-planner-dev" and claims["initiating_user"] == "developer01"
+
+
+def test_agent_no_device_context_allowed_for_comment_and_gpu_submit():
+    claims = {
+        "actor_type": "agent",
+        "agent_id": "agent-gpu-planner-dev",
+        "initiating_user": "developer01",
+        "security_context": {"device_posture_reason": "no_device_context", "cert_bound": True},
+    }
+    assert posture_allowed_for_action(claims, "agent.comment")[0]
+    assert posture_allowed_for_action(claims, "gpu.job.submit")[0]
+
+
+def test_user_without_valid_posture_denied_sensitive_actions():
+    claims = {"actor_type": "user", "security_context": {"device_posture_reason": "device_not_managed", "cert_bound": True}}
+    assert not posture_allowed_for_action(claims, "gpu.job.submit")[0]
+    assert not posture_allowed_for_action(claims, "gpu.quota.update")[0]
+    assert not posture_allowed_for_action(claims, "deploy.prod")[0]
+
+
+def test_deploy_prod_requires_allowed_posture():
+    claims = {"actor_type": "user", "security_context": {"device_posture_reason": "allowed", "cert_bound": True}}
+    assert posture_allowed_for_action(claims, "deploy.prod")[0]
