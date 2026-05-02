@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -30,6 +31,26 @@ def pp(obj): print(json.dumps(obj, indent=2, sort_keys=True))
 def state(): return json_load(CLI_STATE, {})
 def save_state(s): json_save(CLI_STATE, s)
 
+def token_preview(token: str) -> str:
+    if not token:
+        return ""
+    if len(token) <= 24:
+        return "***"
+    return f"{token[:12]}...{token[-8:]}"
+
+
+def token_output(token_response):
+    if os.getenv("SHOW_FULL_TOKENS", "0") == "1":
+        return token_response
+    return {
+        "access_token": "issued",
+        "access_token_preview": token_preview(token_response.get("access_token", "")),
+        "refresh_token": "stored_locally" if token_response.get("refresh_token") else "",
+        "expires_in": token_response.get("expires_in"),
+        "token_type": token_response.get("token_type"),
+    }
+
+
 def proof_headers(access_token, method, path, *, agent=False):
     cert_path = AGENT_CERT_PATH if agent else DEVICE_CERT_PATH
     key_path = AGENT_KEY_PATH if agent else DEVICE_KEY_PATH
@@ -45,13 +66,13 @@ def login(args):
     if not args.auto: input("Press Enter after completing browser login. For demo use --auto. ")
     proof_token = "device-login-proof"
     c = requests.post(f"{TOKEN_URL}/device/complete", json={"user_code": data["user_code"], "device_cert_pem": cert_to_pem_string(DEVICE_CERT_PATH), "proof_signature": sign_proof(DEVICE_KEY_PATH, proof_token, "POST", "/device/complete"), "proof_token": proof_token, "proof_method": "POST", "proof_path": "/device/complete"}); c.raise_for_status()
-    t = requests.post(f"{TOKEN_URL}/token/poll", json={"device_code": data["device_code"]}); t.raise_for_status(); save_state(t.json())
+    t = requests.post(f"{TOKEN_URL}/token/poll", json={"device_code": data["device_code"]}); t.raise_for_status(); token_data = t.json(); save_state(token_data); pp(token_output(token_data))
 
 def refresh(args):
     s = state(); rt = s.get("refresh_token")
     if not rt: sys.exit("No refresh token. Run login first.")
     r = requests.post(f"{TOKEN_URL}/token/refresh", json={"refresh_token": rt, "device_cert_pem": cert_to_pem_string(DEVICE_CERT_PATH), "proof_signature": sign_proof(DEVICE_KEY_PATH, rt, "POST", "/token/refresh"), "proof_token": rt})
-    pp(r.json()); r.raise_for_status(); save_state(r.json())
+    r.raise_for_status(); token_data = r.json(); save_state(token_data); pp(token_output(token_data))
 
 def obo_build(args):
     token = state().get("access_token"); headers = proof_headers(token, "POST", "/obo/exchange")

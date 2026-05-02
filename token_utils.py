@@ -22,8 +22,10 @@ REGION = os.getenv("REGION", "local")
 ISSUER_ID = os.getenv("ISSUER_ID", "issuer-local-01")
 ISSUER_URL = os.getenv("ISSUER_URL", "http://localhost:8000")
 JWKS_CACHE_TTL_SECONDS = int(os.getenv("JWKS_CACHE_TTL_SECONDS", "300"))
-DEV_MODE_CERT_HEADER = os.getenv("DEV_MODE_CERT_HEADER", "0") == "1"
-ALLOW_LOCAL_SIGNING_CERT_FALLBACK = os.getenv("ALLOW_LOCAL_SIGNING_CERT_FALLBACK", "0") == "1"
+# Demo/testing only. Must never be enabled in production.
+UNSAFE_DEV_MODE_CERT_HEADER = os.getenv("UNSAFE_DEV_MODE_CERT_HEADER", os.getenv("DEV_MODE_CERT_HEADER", "0")) == "1"
+# Demo/testing only. Must never be enabled in production.
+UNSAFE_ALLOW_LOCAL_SIGNING_CERT_FALLBACK = os.getenv("UNSAFE_ALLOW_LOCAL_SIGNING_CERT_FALLBACK", os.getenv("ALLOW_LOCAL_SIGNING_CERT_FALLBACK", "0")) == "1"
 ISSUER = ISSUER_URL
 TOKEN_SERVICE_AUD = os.getenv("TOKEN_SERVICE_AUD", "token-service")
 INTERNAL_API_AUD = os.getenv("INTERNAL_API_AUD", "internal-api")
@@ -101,7 +103,7 @@ def decode_and_validate_jwt(token: str, audience: str, *, jwks_uri: Optional[str
             raise ValueError("kid_not_found")
         _verify_with_jwk(signing_input, signature, key)
     except Exception as jwks_error:
-        if not ALLOW_LOCAL_SIGNING_CERT_FALLBACK:
+        if not UNSAFE_ALLOW_LOCAL_SIGNING_CERT_FALLBACK:
             raise ValueError(f"jwks_validation_failed:{jwks_error}")
         cert = x509.load_pem_x509_certificate(SIGNING_CERT_PATH.read_bytes())
         cert.public_key().verify(signature, signing_input, padding.PKCS1v15(), hashes.SHA256())
@@ -109,7 +111,12 @@ def decode_and_validate_jwt(token: str, audience: str, *, jwks_uri: Optional[str
     if claims.get("iss") != ISSUER_URL: raise ValueError("Invalid issuer")
     aud = claims.get("aud")
     if not (audience in aud if isinstance(aud, list) else aud == audience): raise ValueError("Invalid audience")
-    if int(claims.get("exp", 0)) < now(): raise ValueError("Token expired")
+    current_time = now()
+    if int(claims.get("exp", 0)) < current_time: raise ValueError("Token expired")
+    clock_skew_seconds = 60
+    nbf = claims.get("nbf")
+    if nbf is not None and current_time + clock_skew_seconds < int(nbf):
+        raise ValueError("token not yet valid")
     return claims
 
 def scopes_from_claims(claims: Dict[str, Any]) -> set[str]: return set(str(claims.get("scope", "")).split())
@@ -132,7 +139,7 @@ def validate_sender_constrained_proof(claims, cert_pem, signature_b64, access_to
     if not expected: raise ValueError("certificate_binding_failed")
     if cert_pem:
         actual = cert_thumbprint_sha256_pem(cert_pem)
-    elif DEV_MODE_CERT_HEADER and dev_header_thumbprint:
+    elif UNSAFE_DEV_MODE_CERT_HEADER and dev_header_thumbprint:
         actual = dev_header_thumbprint
     else:
         raise ValueError("certificate_binding_failed")
