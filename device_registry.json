@@ -1,13 +1,13 @@
 {
   "devices": [
     {
+      "cert_thumbprint": "CYIuX9QcLj2573dRo0jd2vUA4QM6TwvHt0bssihOblE",
       "device_id": "linux-laptop-001",
-      "owner": "developer01",
-      "os": "linux",
-      "managed": true,
-      "edr_healthy": true,
       "disk_encrypted": true,
-      "cert_thumbprint": "",
+      "edr_healthy": true,
+      "managed": true,
+      "os": "linux",
+      "owner": "developer01",
       "risk": "low",
       "status": "active"
     }

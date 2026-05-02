@@ -166,6 +166,16 @@ class Handler(BaseHTTPRequestHandler):
             token = issue_jwt(subject=f"agent:{agent_id}", audience=INTERNAL_API_AUD, client_id="agent-runtime", scopes=requested, actor_type="agent", ttl_seconds=AGENT_TOKEN_TTL_SECONDS, cnf_x5t=agent["cnf_x5t"], extra_claims={"agent_id": agent_id, "agent_owner": agent["agent_owner"], "environment": agent["environment"], "initiating_user": body.get("initiating_user", "developer01"), "delegation_type":"user_delegated", "gpu_quota_max_jobs": agent["gpu_quota_max_jobs"]})
             audit("agent_token_issued", actor_type="agent", agent_id=agent_id, user=body.get("initiating_user"), scope=" ".join(requested), reason="ok", correlation_id=str(uuid.uuid4())); return self.send_json({"access_token": token, "token_type":"Bearer", "expires_in": AGENT_TOKEN_TTL_SECONDS})
         except Exception as e: audit("agent_token_failed", agent_id=agent_id, reason=str(e)); return self.send_json({"error": str(e)}, 401)
+    def agent_disable(self, body, status):
+        agents = db(AGENT_DB, {})
+        aid = body.get("agent_id")
+        if aid not in agents:
+            return self.send_json({"error":"agent_not_found"}, 404)
+        agents[aid]["status"] = status
+        save(AGENT_DB, agents)
+        audit("agent_status_changed", agent_id=aid, reason=status)
+        return self.send_json(agents[aid])
+
     def introspect(self, body):
         try:
             claims = decode_and_validate_jwt(body.get("token"), body.get("audience", INTERNAL_API_AUD)); return self.send_json({"active": True, "claims": claims})
@@ -181,8 +191,4 @@ if __name__ == "__main__":
     HTTPServer(("127.0.0.1", 8000), Handler).serve_forever()
 
 
-    def agent_disable(self, body, status):
-        agents = db(AGENT_DB, {}); aid = body.get("agent_id");
-        if aid not in agents: return self.send_json({"error":"agent_not_found"},404)
-        agents[aid]["status"] = status; save(AGENT_DB, agents); audit("agent_status_changed", agent_id=aid, reason=status)
-        return self.send_json(agents[aid])
+    
