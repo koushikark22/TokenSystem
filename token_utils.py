@@ -26,6 +26,8 @@ JWKS_CACHE_TTL_SECONDS = int(os.getenv("JWKS_CACHE_TTL_SECONDS", "300"))
 UNSAFE_DEV_MODE_CERT_HEADER = os.getenv("UNSAFE_DEV_MODE_CERT_HEADER", os.getenv("DEV_MODE_CERT_HEADER", "0")) == "1"
 # Demo/testing only. Must never be enabled in production.
 UNSAFE_ALLOW_LOCAL_SIGNING_CERT_FALLBACK = os.getenv("UNSAFE_ALLOW_LOCAL_SIGNING_CERT_FALLBACK", os.getenv("ALLOW_LOCAL_SIGNING_CERT_FALLBACK", "0")) == "1"
+ALLOW_LOCAL_SIGNING_CERT_FALLBACK = UNSAFE_ALLOW_LOCAL_SIGNING_CERT_FALLBACK
+DEBUG_CERT_BINDING = os.getenv("DEBUG_CERT_BINDING", "0") == "1"
 ISSUER = ISSUER_URL
 TOKEN_SERVICE_AUD = os.getenv("TOKEN_SERVICE_AUD", "token-service")
 INTERNAL_API_AUD = os.getenv("INTERNAL_API_AUD", "internal-api")
@@ -120,32 +122,62 @@ def decode_and_validate_jwt(token: str, audience: str, *, jwks_uri: Optional[str
     return claims
 
 def scopes_from_claims(claims: Dict[str, Any]) -> set[str]: return set(str(claims.get("scope", "")).split())
+
+
+def _normalize_proof_path(path: str) -> str:
+    p = (path or "/").split("?", 1)[0].strip()
+    if not p.startswith("/"):
+        p = f"/{p}"
+    if len(p) > 1 and p.endswith("/"):
+        p = p.rstrip("/")
+    return p
+
+
+def _proof_message(access_token: str, method: str, path: str) -> bytes:
+    normalized_method = (method or "").upper().strip()
+    normalized_path = _normalize_proof_path(path)
+    return f"{normalized_method}\n{normalized_path}\n{hashlib.sha256(access_token.encode()).hexdigest()}".encode()
 def has_scopes(claims: Dict[str, Any], required: Iterable[str]) -> bool: return set(required).issubset(scopes_from_claims(claims))
 
 def sign_proof(private_key_path: Path, access_token: str, method: str, path: str) -> str:
-    msg = f"{method.upper()}\n{path}\n{hashlib.sha256(access_token.encode()).hexdigest()}".encode()
+    msg = _proof_message(access_token, method, path)
     sig = load_private_key(private_key_path).sign(msg, padding.PKCS1v15(), hashes.SHA256())
     return b64url(sig)
 
 def verify_proof(cert_pem: str, signature_b64: str, access_token: str, method: str, path: str) -> bool:
     cert = x509.load_pem_x509_certificate(cert_pem.encode())
-    msg = f"{method.upper()}\n{path}\n{hashlib.sha256(access_token.encode()).hexdigest()}".encode()
+    msg = _proof_message(access_token, method, path)
     sig = base64.urlsafe_b64decode(signature_b64 + "=" * (-len(signature_b64) % 4))
     try: cert.public_key().verify(sig, msg, padding.PKCS1v15(), hashes.SHA256()); return True
     except Exception: return False
 
+
+
+def _certificate_binding_error(**details):
+    if not DEBUG_CERT_BINDING:
+        return ValueError("certificate_binding_failed")
+    detail_text = " ".join(f"{k}={v}" for k, v in details.items())
+    return ValueError(f"certificate_binding_failed: {detail_text}")
+
 def validate_sender_constrained_proof(claims, cert_pem, signature_b64, access_token, method, path, dev_header_thumbprint=None):
     expected = (claims.get("cnf") or {}).get("x5t#S256")
-    if not expected: raise ValueError("certificate_binding_failed")
+    normalized_method = (method or "").upper().strip()
+    normalized_path = _normalize_proof_path(path)
+    if not expected:
+        raise _certificate_binding_error(reason="missing_token_cnf", method=normalized_method, path=normalized_path)
+
+    actual = None
     if cert_pem:
         actual = cert_thumbprint_sha256_pem(cert_pem)
     elif UNSAFE_DEV_MODE_CERT_HEADER and dev_header_thumbprint:
         actual = dev_header_thumbprint
     else:
-        raise ValueError("certificate_binding_failed")
-    if actual != expected: raise ValueError("certificate_binding_failed")
-    if cert_pem and signature_b64 and not verify_proof(cert_pem, signature_b64, access_token, method, path):
-        raise ValueError("certificate_binding_failed")
+        raise _certificate_binding_error(expected=expected, actual="missing", method=normalized_method, path=normalized_path, thumbprint_mismatch=True, signature_failed="unknown")
+
+    thumbprint_mismatch = actual != expected
+    signature_failed = bool(cert_pem and signature_b64 and not verify_proof(cert_pem, signature_b64, access_token, method, path))
+    if thumbprint_mismatch or signature_failed:
+        raise _certificate_binding_error(expected=expected, actual=actual, method=normalized_method, path=normalized_path, thumbprint_mismatch=thumbprint_mismatch, signature_failed=signature_failed)
 
 def json_load(path: Path, default: Any):
     if not path.exists(): return default

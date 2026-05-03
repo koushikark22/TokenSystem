@@ -75,6 +75,7 @@ python internal_api.py
 
 ```bash
 source .venv/bin/activate
+python devctl.py bootstrap-device-registry
 python devctl.py login --auto
 python devctl.py obo-build
 python devctl.py gpu-submit
