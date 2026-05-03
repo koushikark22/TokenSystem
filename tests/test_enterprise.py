@@ -218,3 +218,24 @@ def test_demo_functions_execute_real_steps_not_noop():
     text = Path("devctl.py").read_text()
     assert 'def demo_full(args):' in text and 'login(argparse.Namespace(auto=True))' in text and '_audit("demo_full_completed")' in text
     assert 'def demo_enterprise(args):' in text and 'register_device_cmd' in text and '_audit("demo_enterprise_completed")' in text
+
+def test_demo_agent_submit_handles_quota_exceeded(monkeypatch):
+    import devctl
+
+    class Resp:
+        status_code = 429
+        content = b"x"
+        def json(self):
+            return {"error": "gpu_quota_exceeded", "actor": "agent1", "max_jobs": 1}
+
+    err = __import__("requests").HTTPError("quota")
+    err.response = Resp()
+
+    monkeypatch.setattr(devctl, "agent_gpu_submit", lambda args: (_ for _ in ()).throw(err))
+    devctl._agent_gpu_submit_for_demo("agent1")
+
+
+def test_demo_functions_use_unique_demo_agent_ids():
+    text = Path("devctl.py").read_text()
+    assert "agent-gpu-planner-demo-full-" in text
+    assert "agent-gpu-planner-demo-enterprise-" in text

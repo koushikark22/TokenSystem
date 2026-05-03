@@ -101,7 +101,7 @@ def gpu_quota_update(args):
     pp(a.json()); a.raise_for_status()
 
 def register_agent(args):
-    payload={"agent_id": args.agent_id or "agent-gpu-planner-dev", "agent_owner":"platform-security", "environment":"dev", "allowed_scopes":["repo.read","pr.comment","gpu.job.submit","gpu.job.read"], "gpu_quota_max_jobs":1}
+    payload={"agent_id": args.agent_id or "agent-gpu-planner-dev", "agent_owner":"platform-security", "environment":"dev", "allowed_scopes":["repo.read","pr.comment","gpu.job.submit","gpu.job.read"], "gpu_quota_max_jobs": getattr(args, "gpu_quota_max_jobs", 1)}
     pp(requests.post(f"{TOKEN_URL}/agent/register", json=payload).json())
 
 def agent_token(scopes, agent_id="agent-gpu-planner-dev"):
@@ -110,7 +110,10 @@ def agent_token(scopes, agent_id="agent-gpu-planner-dev"):
     r = requests.post(f"{TOKEN_URL}/agent/token", headers=headers, json={"agent_id": agent_id, "initiating_user": "developer01", "scopes": scopes, "proof_token": proof_token}); r.raise_for_status(); return r.json()["access_token"]
 
 def agent_comment(args): a = requests.post(f"{API_URL}/agent/comment", headers=proof_headers(agent_token(["pr.comment"]), "POST", "/agent/comment", agent=True), json={"pr": 123}); pp(a.json()); a.raise_for_status()
-def agent_gpu_submit(args): a = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(agent_token(["gpu.job.submit"]), "POST", "/gpu/jobs/submit", agent=True), json={"model": "agent-planned-model", "dataset": "approved-dev-dataset", "gpu_count": 1}); pp(a.json()); a.raise_for_status()
+def agent_gpu_submit(args):
+    agent_id = getattr(args, "agent_id", "agent-gpu-planner-dev")
+    a = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(agent_token(["gpu.job.submit"], agent_id=agent_id), "POST", "/gpu/jobs/submit", agent=True), json={"model": "agent-planned-model", "dataset": "approved-dev-dataset", "gpu_count": 1})
+    pp(a.json()); a.raise_for_status()
 
 def audit(args):
     events = requests.get(f"{TOKEN_URL}/audit").json()
@@ -118,6 +121,18 @@ def audit(args):
     if getattr(args, "user", None): events = [e for e in events if e.get("user") == args.user]
     if getattr(args, "agent_id", None): events = [e for e in events if e.get("agent_id") == args.agent_id]
     pp(events)
+
+
+def _agent_gpu_submit_for_demo(agent_id):
+    try:
+        agent_gpu_submit(argparse.Namespace(agent_id=agent_id))
+    except requests.HTTPError as exc:
+        rsp = getattr(exc, "response", None)
+        data = rsp.json() if rsp is not None and rsp.content else {"error": str(exc)}
+        if rsp is not None and rsp.status_code == 429 and data.get("error") == "gpu_quota_exceeded":
+            pp({"status": "expected_policy_enforcement", "detail": data, "agent_id": agent_id})
+            return
+        raise
 
 def users_cmd(args): ensure_default_user(); pp({"users": list_users()})
 def register_user_cmd(args): pp(reg_user_local(args.user)); _audit("user_registered", user=args.user)
@@ -147,9 +162,10 @@ def demo_full(args):
     refresh(args)
     deploy_prod(args)
     gpu_quota_update(argparse.Namespace(subject="developer01", quota=3))
-    register_agent(argparse.Namespace(agent_id="agent-gpu-planner-dev"))
+    demo_agent_id = f"agent-gpu-planner-demo-full-{now()}"
+    register_agent(argparse.Namespace(agent_id=demo_agent_id, gpu_quota_max_jobs=3))
     agent_comment(args)
-    agent_gpu_submit(args)
+    _agent_gpu_submit_for_demo(demo_agent_id)
     audit(argparse.Namespace(event_type=None, user=None, agent_id=None))
     _audit("demo_full_completed")
 
@@ -161,10 +177,11 @@ def demo_enterprise(args):
     disable_device_cmd(argparse.Namespace(device="linux-laptop-002"))
     device_status(argparse.Namespace(device_id="linux-laptop-002"))
     enable_device_cmd(argparse.Namespace(device="linux-laptop-002"))
-    register_agent(argparse.Namespace(agent_id="agent-gpu-planner-dev"))
+    demo_agent_id = f"agent-gpu-planner-demo-enterprise-{now()}"
+    register_agent(argparse.Namespace(agent_id=demo_agent_id, gpu_quota_max_jobs=3))
     agents_cmd(args)
-    agent_status(argparse.Namespace(agent_id="agent-gpu-planner-dev"))
-    agent_gpu_submit(args)
+    agent_status(argparse.Namespace(agent_id=demo_agent_id))
+    _agent_gpu_submit_for_demo(demo_agent_id)
     audit(argparse.Namespace(event_type=None, user=None, agent_id=None))
     _audit("demo_enterprise_completed")
 
@@ -176,7 +193,7 @@ def main():
     sub.add_parser("gpu-jobs").set_defaults(func=gpu_jobs)
     sub.add_parser("deploy-prod").set_defaults(func=deploy_prod)
     q=sub.add_parser("gpu-quota-update"); q.add_argument("--subject", default="developer01"); q.add_argument("--quota", type=int, default=3); q.set_defaults(func=gpu_quota_update)
-    ra=sub.add_parser("register-agent"); ra.add_argument("--agent-id", default="agent-gpu-planner-dev"); ra.set_defaults(func=register_agent)
+    ra=sub.add_parser("register-agent"); ra.add_argument("--agent-id", default="agent-gpu-planner-dev"); ra.add_argument("--gpu-quota-max-jobs", type=int, default=1); ra.set_defaults(func=register_agent)
     sub.add_parser("agent-comment").set_defaults(func=agent_comment); sub.add_parser("agent-gpu-submit").set_defaults(func=agent_gpu_submit)
     a=sub.add_parser("audit"); a.add_argument("--event-type"); a.add_argument("--user"); a.add_argument("--agent-id"); a.set_defaults(func=audit)
     d=sub.add_parser("device-status"); d.add_argument("--device-id", required=True); d.set_defaults(func=device_status)
