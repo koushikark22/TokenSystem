@@ -1,6 +1,8 @@
 import json, secrets, uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
+from user_registry import ensure_default_user, get_user, list_users, register_user, set_user_status
+from device_registry import check_device_posture
 
 from token_utils import (
     AGENT_CERT_PATH, AGENT_TOKEN_TTL_SECONDS, ACCESS_TOKEN_TTL_SECONDS, DEVICE_CERT_PATH, INTERNAL_API_AUD,
@@ -76,9 +78,11 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             audit("handler_error", path=p, reason=str(e)); return self.send_json({"error": str(e)}, 500)
     def device_start(self, body):
+        ensure_default_user()
         client_id = body.get("client_id", CLIENT_ID); scopes = body.get("scopes", DEFAULT_DEVICE_SCOPES)
+        user_id = body.get("user", USER_ID)
         device_code = secrets.token_urlsafe(32); user_code = secrets.token_hex(4).upper(); codes = db(DEVICE_CODE_DB, {})
-        codes[device_code] = {"client_id": client_id, "scopes": scopes, "user_code": user_code, "authorized": False, "user": USER_ID, "created": now()}
+        codes[device_code] = {"client_id": client_id, "scopes": scopes, "user_code": user_code, "authorized": False, "user": user_id, "created": now()}
         save(DEVICE_CODE_DB, codes); audit("device_code_started", client_id=client_id, scopes=scopes)
         return self.send_json({"device_code": device_code, "user_code": user_code, "verification_uri": f"{ISSUER}/device/complete", "message": f"Open {ISSUER}/device/complete and enter code {user_code}. Demo supports --auto."})
     def device_complete(self, body):
@@ -99,21 +103,28 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"status":"authorized", "user": rec["user"], "device_id": DEVICE_ID})
         return self.send_json({"error":"invalid user_code"}, 404)
     def token_poll(self, body):
+        ensure_default_user()
         codes = db(DEVICE_CODE_DB, {}); rec = codes.get(body.get("device_code"))
         if not rec: return self.send_json({"error":"invalid device_code"}, 404)
         if not rec.get("authorized"): return self.send_json({"status":"authorization_pending"}, 202)
+        u=get_user(rec["user"])
+        if not u or u.get("status")!="active":
+            return self.send_json({"error":"user_not_active"},403)
         access = issue_jwt(subject=rec["user"], audience=TOKEN_SERVICE_AUD, client_id=rec["client_id"], scopes=rec["scopes"], actor_type="user", cnf_x5t=rec["device_thumbprint"], extra_claims={"device_id": DEVICE_ID, "auth_strength":"mfa", "idp":"entra-simulated"})
         refresh = new_refresh_record(rec["user"], rec["client_id"], rec["scopes"], rec["device_thumbprint"])
         del codes[body.get("device_code")]; save(DEVICE_CODE_DB, codes)
         audit("token_issued", user=rec["user"], actor_type="user", audience=TOKEN_SERVICE_AUD, scope=" ".join(rec["scopes"]), device_id=DEVICE_ID, reason="ok", correlation_id=str(uuid.uuid4()))
         return self.send_json({"access_token": access, "refresh_token": refresh, "token_type":"Bearer", "expires_in": ACCESS_TOKEN_TTL_SECONDS})
     def token_refresh(self, body):
+        ensure_default_user()
         from token_utils import verify_proof
         from device_registry import check_device_posture
         from policy_engine import evaluate_policy
         rt = body.get("refresh_token"); cert_pem = body.get("device_cert_pem"); proof_sig = body.get("proof_signature"); records = db(REFRESH_DB, {}); rec = records.get(rt)
         if not rec: return self.send_json({"error":"invalid refresh token"}, 401)
         if rec.get("revoked") or rec.get("expires",0) < now(): return self.send_json({"error":"refresh token expired/revoked"}, 401)
+        u=get_user(rec.get("user"))
+        if not u or u.get("status") in ["disabled","revoked"]: return self.send_json({"error":"user_not_active"},403)
         if rec.get("used"):
             fam = rec["family_id"]
             for r in records.values():
@@ -150,7 +161,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e: audit("stepup_failed", reason=str(e)); return self.send_json({"error": str(e)}, 401)
     def agent_register(self, body):
         agent_id = body.get("agent_id", "agent-gpu-planner-dev"); agents = db(AGENT_DB, {}); cert_pem = cert_to_pem_string(AGENT_CERT_PATH)
-        agents[agent_id] = {"agent_id": agent_id, "agent_owner": body.get("agent_owner", "platform-security"), "environment": body.get("environment", "dev"), "purpose": body.get("purpose", "submit controlled GPU jobs and comment on PRs"), "allowed_scopes": body.get("allowed_scopes", ["repo.read", "pr.comment", "gpu.job.submit", "gpu.job.read"]), "gpu_quota_max_jobs": body.get("gpu_quota_max_jobs", 1), "cnf_x5t": cert_thumbprint_sha256_pem(cert_pem), "status": body.get("status","active")}
+        agents[agent_id] = {"agent_id": agent_id, "agent_owner": body.get("agent_owner", "platform-security"), "environment": body.get("environment", "dev"), "purpose": body.get("purpose", "submit controlled GPU jobs and comment on PRs"), "allowed_scopes": body.get("allowed_scopes", ["repo.read", "pr.comment", "gpu.job.submit", "gpu.job.read"]), "gpu_quota_max_jobs": body.get("gpu_quota_max_jobs", 1), "cert_thumbprint": cert_thumbprint_sha256_pem(cert_pem), "status": body.get("status","active"), "actor_type":"agent", "owner": body.get("agent_owner", "platform-security"), "created": now()}
         save(AGENT_DB, agents); audit("agent_registered", agent_id=agent_id, scopes=agents[agent_id]["allowed_scopes"]); return self.send_json(agents[agent_id])
     def agent_token(self, body):
         from token_utils import verify_proof
@@ -161,10 +172,10 @@ class Handler(BaseHTTPRequestHandler):
         if not agent: return self.send_json({"error":"agent_not_found"}, 404)
         if agent.get("status") != "active": return self.send_json({"error":"agent_not_active"}, 403)
         try:
-            if cert_thumbprint_sha256_pem(cert_pem) != agent["cnf_x5t"] or not verify_proof(cert_pem, proof_sig, proof_token, "POST", "/agent/token"): raise ValueError("certificate_binding_failed")
+            if cert_thumbprint_sha256_pem(cert_pem) != agent["cert_thumbprint"] or not verify_proof(cert_pem, proof_sig, proof_token, "POST", "/agent/token"): raise ValueError("certificate_binding_failed")
             if not body.get("initiating_user"): raise ValueError("initiating_user_missing")
             if not set(requested).issubset(set(agent["allowed_scopes"])): raise ValueError("requested scopes exceed agent policy")
-            token = issue_jwt(subject=f"agent:{agent_id}", audience=INTERNAL_API_AUD, client_id="agent-runtime", scopes=requested, actor_type="agent", ttl_seconds=AGENT_TOKEN_TTL_SECONDS, cnf_x5t=agent["cnf_x5t"], extra_claims={"agent_id": agent_id, "agent_owner": agent["agent_owner"], "environment": agent["environment"], "initiating_user": body.get("initiating_user", "developer01"), "delegation_type":"user_delegated", "gpu_quota_max_jobs": agent["gpu_quota_max_jobs"]})
+            token = issue_jwt(subject=f"agent:{agent_id}", audience=INTERNAL_API_AUD, client_id="agent-runtime", scopes=requested, actor_type="agent", ttl_seconds=AGENT_TOKEN_TTL_SECONDS, cnf_x5t=agent["cert_thumbprint"], extra_claims={"agent_id": agent_id, "agent_owner": agent["agent_owner"], "environment": agent["environment"], "initiating_user": body.get("initiating_user", "developer01"), "delegation_type":"user_delegated", "gpu_quota_max_jobs": agent["gpu_quota_max_jobs"]})
             audit("agent_token_issued", actor_type="agent", agent_id=agent_id, user=body.get("initiating_user"), scope=" ".join(requested), reason="ok", correlation_id=str(uuid.uuid4())); return self.send_json({"access_token": token, "token_type":"Bearer", "expires_in": AGENT_TOKEN_TTL_SECONDS})
         except Exception as e: audit("agent_token_failed", agent_id=agent_id, reason=str(e)); return self.send_json({"error": str(e)}, 401)
     def agent_disable(self, body, status):

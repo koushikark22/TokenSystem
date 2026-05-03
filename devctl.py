@@ -7,6 +7,8 @@ from pathlib import Path
 import requests
 
 from device_registry import bootstrap_device_registry, get_device
+from user_registry import list_users, register_user as reg_user_local, set_user_status, ensure_default_user
+from device_registry import list_devices, register_device, set_device_status, rotate_device_cert
 from token_utils import (
     AGENT_CERT_PATH,
     AGENT_KEY_PATH,
@@ -117,6 +119,25 @@ def audit(args):
     if args.format == "jsonl": print("\n".join(json.dumps(e) for e in events))
     else: pp(events)
 
+
+def users_cmd(args): ensure_default_user(); pp({"users": list_users()})
+def register_user_cmd(args): u=reg_user_local(args.user); requests.post(f"{TOKEN_URL}/audit") if False else None; pp(u)
+def disable_user_cmd(args): pp(set_user_status(args.user, "disabled") or {"error":"user_not_found"})
+def enable_user_cmd(args): pp(set_user_status(args.user, "active") or {"error":"user_not_found"})
+def revoke_user_cmd(args): pp(set_user_status(args.user, "revoked") or {"error":"user_not_found"})
+def devices_cmd(args): pp({"devices": list_devices()})
+def register_device_cmd(args): pp(register_device(args.user, args.device))
+def disable_device_cmd(args): pp(set_device_status(args.device, "disabled") or {"error":"device_not_found"})
+def enable_device_cmd(args): pp(set_device_status(args.device, "active") or {"error":"device_not_found"})
+def rotate_device_cert_cmd(args): thumb = cert_thumbprint_sha256_pem(cert_to_pem_string(DEVICE_CERT_PATH)); pp(rotate_device_cert(args.device, thumb) or {"error":"device_not_found"})
+def agents_cmd(args): pp(requests.get(f"{TOKEN_URL}/audit").json())
+def rotate_agent_cert(args): pp(requests.post(f"{TOKEN_URL}/agent/rotate-cert", json={"agent_id":args.agent_id}).json())
+def agent_status(args): pp(requests.get(f"{TOKEN_URL}/agent/status/{args.agent_id}").json())
+def demo_full(args):
+    bootstrap_device_registry_cmd(args); login(argparse.Namespace(auto=True)); obo_build(args); gpu_submit(argparse.Namespace(model='demo-transformer',dataset='synthetic-dev-data',gpu_count=1)); gpu_jobs(args); refresh(args); refresh(args); deploy_prod(args); gpu_quota_update(argparse.Namespace(subject='developer01',quota=3)); register_agent(args); agent_comment(args); agent_gpu_submit(args); audit(argparse.Namespace(format='json', event_type=None, user=None, agent_id=None))
+def demo_enterprise(args):
+    users_cmd(args); register_user_cmd(argparse.Namespace(user='developer02')); register_device_cmd(argparse.Namespace(user='developer02',device='linux-laptop-002')); devices_cmd(args); disable_device_cmd(argparse.Namespace(device='linux-laptop-002')); device_status(argparse.Namespace(device_id='linux-laptop-002')); enable_device_cmd(argparse.Namespace(device='linux-laptop-002')); register_agent(args); agent_gpu_submit(args); audit(argparse.Namespace(format='json', event_type=None, user=None, agent_id=None))
+
 def jwks_cmd(args): pp(requests.get(f"{TOKEN_URL}/.well-known/jwks.json").json())
 def validate_token(args): pp(requests.post(f"{TOKEN_URL}/introspect", json={"token": args.token, "audience": INTERNAL_API_AUD}).json())
 def device_status(args): pp(get_device(args.device_id) or {"error":"device_not_found"})
@@ -144,6 +165,22 @@ def main():
     dis = sub.add_parser("disable-agent"); dis.add_argument("--agent-id", required=True); dis.set_defaults(func=disable_agent)
     en = sub.add_parser("enable-agent"); en.add_argument("--agent-id", required=True); en.set_defaults(func=enable_agent)
     sub.add_parser("bootstrap-device-registry").set_defaults(func=bootstrap_device_registry_cmd)
+    u=sub.add_parser("users"); u.set_defaults(func=users_cmd)
+    ru=sub.add_parser("register-user"); ru.add_argument("--user", required=True); ru.set_defaults(func=register_user_cmd)
+    du=sub.add_parser("disable-user"); du.add_argument("--user", required=True); du.set_defaults(func=disable_user_cmd)
+    eu=sub.add_parser("enable-user"); eu.add_argument("--user", required=True); eu.set_defaults(func=enable_user_cmd)
+    rv=sub.add_parser("revoke-user"); rv.add_argument("--user", required=True); rv.set_defaults(func=revoke_user_cmd)
+    dv=sub.add_parser("devices"); dv.set_defaults(func=devices_cmd)
+    rd=sub.add_parser("register-device"); rd.add_argument("--user", required=True); rd.add_argument("--device", required=True); rd.set_defaults(func=register_device_cmd)
+    dd=sub.add_parser("disable-device"); dd.add_argument("--device", required=True); dd.set_defaults(func=disable_device_cmd)
+    ed=sub.add_parser("enable-device"); ed.add_argument("--device", required=True); ed.set_defaults(func=enable_device_cmd)
+    rdc=sub.add_parser("rotate-device-cert"); rdc.add_argument("--device", required=True); rdc.set_defaults(func=rotate_device_cert_cmd)
+    ag=sub.add_parser("agents"); ag.set_defaults(func=agents_cmd)
+    rac=sub.add_parser("rotate-agent-cert"); rac.add_argument("--agent-id", required=True); rac.set_defaults(func=rotate_agent_cert)
+    ast=sub.add_parser("agent-status"); ast.add_argument("--agent-id", required=True); ast.set_defaults(func=agent_status)
+    sub.add_parser("demo-full").set_defaults(func=demo_full)
+    sub.add_parser("demo-enterprise").set_defaults(func=demo_enterprise)
+
     args = p.parse_args(); args.func(args)
 
 if __name__ == "__main__":
