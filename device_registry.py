@@ -1,10 +1,11 @@
 from pathlib import Path
 
-from token_utils import DEVICE_CERT_PATH, cert_thumbprint_sha256_pem, cert_to_pem_string, json_load, json_save
+from token_utils import DEBUG_CERT_BINDING, DEVICE_CERT_PATH, cert_thumbprint_sha256_pem, cert_to_pem_string, json_load, json_save
 
 DEVICE_REGISTRY_PATH = Path(__file__).resolve().parent / "device_registry.json"
 
 def bootstrap_device_registry():
+    DEVICE_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
     data = json_load(DEVICE_REGISTRY_PATH, {"devices": []})
     thumbprint = cert_thumbprint_sha256_pem(cert_to_pem_string(DEVICE_CERT_PATH))
     device = {
@@ -38,5 +39,9 @@ def check_device_posture(device_id: str, cert_thumbprint: str):
     if not device.get("edr_healthy"): return False, "edr_unhealthy"
     if not device.get("disk_encrypted"): return False, "disk_not_encrypted"
     if str(device.get("risk", "")).lower() == "high": return False, "device_risk_high"
-    if device.get("cert_thumbprint") != cert_thumbprint: return False, "certificate_binding_failed"
+    expected_thumbprint = device.get("cert_thumbprint")
+    if expected_thumbprint != cert_thumbprint:
+        if DEBUG_CERT_BINDING:
+            return False, f"certificate_binding_failed: device_id={device_id} expected={expected_thumbprint} actual={cert_thumbprint}"
+        return False, "certificate_binding_failed"
     return True, "allowed"

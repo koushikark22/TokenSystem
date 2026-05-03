@@ -105,6 +105,32 @@ def test_deploy_prod_requires_allowed_posture():
     assert posture_allowed_for_action(claims, "deploy.prod")[0]
 
 
+
+
+def test_bootstrap_device_registry_repairs_stale_thumbprint_for_gpu_submit_scope():
+    from device_registry import DEVICE_REGISTRY_PATH
+
+    # Seed stale registry state that should fail posture checks.
+    stale = {
+        "devices": [{
+            "device_id": "linux-laptop-001",
+            "owner": "developer01",
+            "os": "linux",
+            "managed": True,
+            "edr_healthy": True,
+            "disk_encrypted": True,
+            "cert_thumbprint": "stale-thumbprint",
+            "risk": "low",
+            "status": "active",
+        }]
+    }
+    token_utils.json_save(DEVICE_REGISTRY_PATH, stale)
+
+    current_thumb = token_utils.cert_thumbprint_sha256_pem(token_utils.cert_to_pem_string(token_utils.DEVICE_CERT_PATH))
+    assert check_device_posture("linux-laptop-001", current_thumb)[0] is False
+
+    bootstrap_device_registry()
+    assert check_device_posture("linux-laptop-001", current_thumb) == (True, "allowed")
 def test_route_wiring_uses_correct_action_names():
     text = Path("internal_api.py").read_text()
     assert 'posture_allowed_for_action(c, "gpu.job.submit")' in text
