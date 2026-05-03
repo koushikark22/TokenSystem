@@ -123,9 +123,10 @@ class Handler(BaseHTTPRequestHandler):
         if not cert_pem or cert_thumbprint_sha256_pem(cert_pem) != rec["cnf_x5t"] or not verify_proof(cert_pem, proof_sig, rt, "POST", "/token/refresh"):
             return self.send_json({"error":"device proof failed"}, 401)
         rec["used"] = True
+        save(REFRESH_DB, records)
         access = issue_jwt(subject=rec["user"], audience=TOKEN_SERVICE_AUD, client_id=rec["client_id"], scopes=rec["scopes"], actor_type=rec.get("actor_type","user"), cnf_x5t=rec["cnf_x5t"], extra_claims={"device_id": DEVICE_ID, "auth_strength":"mfa", "idp":"entra-simulated"})
         new_rt = new_refresh_record(rec["user"], rec["client_id"], rec["scopes"], rec["cnf_x5t"], family_id=rec["family_id"])
-        save(REFRESH_DB, records); audit("token_refreshed", user=rec["user"], family_id=rec["family_id"])
+        audit("token_refreshed", user=rec["user"], family_id=rec["family_id"])
         return self.send_json({"access_token": access, "refresh_token": new_rt, "token_type":"Bearer", "expires_in": ACCESS_TOKEN_TTL_SECONDS})
     def obo_exchange(self, body):
         incoming = bearer(self.headers); requested = body.get("scopes", ["build.read"]); target_aud = body.get("audience", INTERNAL_API_AUD)

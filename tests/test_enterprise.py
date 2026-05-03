@@ -136,3 +136,52 @@ def test_route_wiring_uses_correct_action_names():
     assert 'posture_allowed_for_action(c, "gpu.job.submit")' in text
     assert 'posture_allowed_for_action(c, "gpu.quota.update")' in text
     assert 'posture_allowed_for_action(c, "agent.comment")' in text
+
+
+def test_refresh_rotation_allows_chain_and_reuse_revokes_family(monkeypatch, tmp_path):
+    import token_service
+
+    refresh_db = tmp_path / "refresh_tokens.json"
+    audit_db = tmp_path / "audit.json"
+    monkeypatch.setattr(token_service, "REFRESH_DB", refresh_db)
+    monkeypatch.setattr(token_service, "AUDIT_DB", audit_db)
+    monkeypatch.setattr(token_utils, "verify_proof", lambda *args, **kwargs: True)
+
+    cert_pem = token_utils.cert_to_pem_string(token_utils.DEVICE_CERT_PATH)
+    thumb = token_utils.cert_thumbprint_sha256_pem(cert_pem)
+
+    rt1 = token_service.new_refresh_record("developer01", "linux-devctl", ["build.read"], thumb)
+
+    handler = token_service.Handler.__new__(token_service.Handler)
+    captured = {}
+    handler.send_json = lambda data, status=200: captured.update({"data": data, "status": status}) or captured
+
+    resp1 = token_service.Handler.token_refresh(handler, {
+        "refresh_token": rt1,
+        "device_cert_pem": cert_pem,
+        "proof_signature": "sig"
+    })
+    assert resp1["status"] == 200
+    rt2 = resp1["data"]["refresh_token"]
+
+    resp2 = token_service.Handler.token_refresh(handler, {
+        "refresh_token": rt2,
+        "device_cert_pem": cert_pem,
+        "proof_signature": "sig"
+    })
+    assert resp2["status"] == 200
+
+    reuse = token_service.Handler.token_refresh(handler, {
+        "refresh_token": rt1,
+        "device_cert_pem": cert_pem,
+        "proof_signature": "sig"
+    })
+    assert reuse["status"] == 401
+    assert "reuse detected" in reuse["data"]["error"]
+
+    records = token_service.db(refresh_db, {})
+    assert records[rt1]["used"] is True
+    family_id = records[rt1]["family_id"]
+    assert records[rt1]["revoked"] is True
+    assert records[rt2]["family_id"] == family_id
+    assert records[rt2]["revoked"] is True
