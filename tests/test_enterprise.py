@@ -207,3 +207,14 @@ def test_cli_commands_present():
     text = Path("devctl.py").read_text()
     for cmd in ["users", "register-user", "devices", "register-device", "disable-device", "enable-device", "agents", "agent-status", "rotate-agent-cert", "demo-full", "demo-enterprise"]:
         assert f'add_parser("{cmd}")' in text
+
+def test_cli_deploy_and_quota_commands_present():
+    text = Path("devctl.py").read_text()
+    assert 'add_parser("deploy-prod")' in text
+    assert 'add_parser("gpu-quota-update")' in text
+
+
+def test_demo_functions_execute_real_steps_not_noop():
+    text = Path("devctl.py").read_text()
+    assert 'def demo_full(args):' in text and 'login(argparse.Namespace(auto=True))' in text and '_audit("demo_full_completed")' in text
+    assert 'def demo_enterprise(args):' in text and 'register_device_cmd' in text and '_audit("demo_enterprise_completed")' in text
