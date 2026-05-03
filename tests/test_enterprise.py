@@ -185,3 +185,25 @@ def test_refresh_rotation_allows_chain_and_reuse_revokes_family(monkeypatch, tmp
     assert records[rt1]["revoked"] is True
     assert records[rt2]["family_id"] == family_id
     assert records[rt2]["revoked"] is True
+
+def test_token_service_agent_routes_and_rotate(tmp_path, monkeypatch):
+    import token_service
+    monkeypatch.setattr(token_service, "AGENT_DB", tmp_path / "agents.json")
+    monkeypatch.setattr(token_service, "AUDIT_DB", tmp_path / "audit.json")
+    token_service.save(token_service.AGENT_DB, {"agent-gpu-planner-dev": {"agent_id":"agent-gpu-planner-dev", "cert_thumbprint":"x", "status":"active"}})
+    h = token_service.Handler.__new__(token_service.Handler)
+    captured = {}
+    h.send_json = lambda data, status=200: captured.update({"data":data, "status":status}) or captured
+    token_service.Handler.agent_rotate_cert(h, {"agent_id":"agent-gpu-planner-dev"})
+    assert captured["status"] == 200
+
+
+def test_cli_register_agent_supports_agent_id_flag():
+    text = Path("devctl.py").read_text()
+    assert 'register-agent' in text and '--agent-id' in text
+
+
+def test_cli_commands_present():
+    text = Path("devctl.py").read_text()
+    for cmd in ["users", "register-user", "devices", "register-device", "disable-device", "enable-device", "agents", "agent-status", "rotate-agent-cert", "demo-full", "demo-enterprise"]:
+        assert f'add_parser("{cmd}")' in text

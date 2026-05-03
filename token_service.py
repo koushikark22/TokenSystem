@@ -57,6 +57,11 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/.well-known/openid-configuration": return self.send_json({"issuer":ISSUER_URL,"jwks_uri":f"{ISSUER_URL}/.well-known/jwks.json","id_token_signing_alg_values_supported":["RS256"],"token_endpoint":f"{ISSUER_URL}/token/poll"})
             if p == "/audit": return self.send_json(db(AUDIT_DB, []))
             if p == "/health": return self.send_json({"status":"ok", "issuer": ISSUER})
+            if p == "/agents": return self.send_json({"agents": list(db(AGENT_DB, {}).values())})
+            if p.startswith("/agent/status/"):
+                agent_id = p.split("/agent/status/",1)[1]
+                agent = db(AGENT_DB, {}).get(agent_id)
+                return self.send_json(agent or {"error":"agent_not_found"}, 200 if agent else 404)
             return self.send_json({"error":"not found"}, 404)
         except Exception as e: return self.send_json({"error": str(e)}, 500)
     def do_POST(self):
@@ -72,6 +77,7 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/agent/disable": return self.agent_disable(body, "disabled")
             if p == "/agent/enable": return self.agent_disable(body, "active")
             if p == "/agent/token": return self.agent_token(body)
+            if p == "/agent/rotate-cert": return self.agent_rotate_cert(body)
             if p == "/introspect": return self.introspect(body)
             if p == "/revoke": return self.revoke(body)
             return self.send_json({"error":"not found"}, 404)
@@ -186,6 +192,15 @@ class Handler(BaseHTTPRequestHandler):
         agents[aid]["status"] = status
         save(AGENT_DB, agents)
         audit("agent_status_changed", agent_id=aid, reason=status)
+        return self.send_json(agents[aid])
+
+    def agent_rotate_cert(self, body):
+        aid = body.get("agent_id")
+        agents = db(AGENT_DB, {})
+        if aid not in agents: return self.send_json({"error":"agent_not_found"},404)
+        agents[aid]["cert_thumbprint"] = cert_thumbprint_sha256_pem(cert_to_pem_string(AGENT_CERT_PATH))
+        save(AGENT_DB, agents)
+        audit("agent_cert_rotated", agent_id=aid)
         return self.send_json(agents[aid])
 
     def introspect(self, body):
