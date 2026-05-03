@@ -152,16 +152,27 @@ def verify_proof(cert_pem: str, signature_b64: str, access_token: str, method: s
 
 def validate_sender_constrained_proof(claims, cert_pem, signature_b64, access_token, method, path, dev_header_thumbprint=None):
     expected = (claims.get("cnf") or {}).get("x5t#S256")
-    if not expected: raise ValueError("certificate_binding_failed")
+    normalized_method = (method or "").upper().strip()
+    normalized_path = _normalize_proof_path(path)
+    if not expected:
+        raise ValueError("certificate_binding_failed")
+
+    actual = None
     if cert_pem:
         actual = cert_thumbprint_sha256_pem(cert_pem)
     elif UNSAFE_DEV_MODE_CERT_HEADER and dev_header_thumbprint:
         actual = dev_header_thumbprint
     else:
-        raise ValueError("certificate_binding_failed")
-    if actual != expected: raise ValueError("certificate_binding_failed")
-    if cert_pem and signature_b64 and not verify_proof(cert_pem, signature_b64, access_token, method, path):
-        raise ValueError("certificate_binding_failed")
+        raise ValueError(
+            f"certificate_binding_failed: expected={expected} actual=missing method={normalized_method} path={normalized_path} thumbprint_mismatch=True signature_failed=unknown"
+        )
+
+    thumbprint_mismatch = actual != expected
+    signature_failed = bool(cert_pem and signature_b64 and not verify_proof(cert_pem, signature_b64, access_token, method, path))
+    if thumbprint_mismatch or signature_failed:
+        raise ValueError(
+            f"certificate_binding_failed: expected={expected} actual={actual} method={normalized_method} path={normalized_path} thumbprint_mismatch={thumbprint_mismatch} signature_failed={signature_failed}"
+        )
 
 def json_load(path: Path, default: Any):
     if not path.exists(): return default
