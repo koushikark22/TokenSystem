@@ -239,3 +239,32 @@ def test_demo_functions_use_unique_demo_agent_ids():
     text = Path("devctl.py").read_text()
     assert "agent-gpu-planner-demo-full-" in text
     assert "agent-gpu-planner-demo-enterprise-" in text
+
+def test_agent_gpu_submit_supports_agent_id_flag():
+    text = Path("devctl.py").read_text()
+    assert 'add_parser("agent-gpu-submit")' in text and '--agent-id' in text
+
+
+def test_demo_full_handles_user_quota_exceeded(monkeypatch):
+    import devctl, requests
+
+    calls = []
+    monkeypatch.setattr(devctl, "bootstrap_device_registry_cmd", lambda args: calls.append("bootstrap"))
+    monkeypatch.setattr(devctl, "login", lambda args: calls.append("login"))
+    monkeypatch.setattr(devctl, "obo_build", lambda args: calls.append("obo"))
+
+    class Resp:
+        status_code = 429
+        content = b"x"
+        def json(self):
+            return {"error": "gpu_quota_exceeded", "actor": "developer01", "max_jobs": 3}
+
+    err = requests.HTTPError("quota")
+    err.response = Resp()
+    monkeypatch.setattr(devctl, "gpu_submit", lambda args: (_ for _ in ()).throw(err))
+
+    for fn in ["gpu_jobs", "refresh", "deploy_prod", "gpu_quota_update", "register_agent", "agent_comment", "_agent_gpu_submit_for_demo", "audit", "_audit"]:
+        monkeypatch.setattr(devctl, fn, lambda *a, **k: calls.append(fn))
+
+    devctl.demo_full(object())
+    assert "bootstrap" in calls and "login" in calls and "obo" in calls

@@ -134,6 +134,18 @@ def _agent_gpu_submit_for_demo(agent_id):
             return
         raise
 
+
+def _gpu_submit_for_demo():
+    try:
+        gpu_submit(argparse.Namespace(model="demo-transformer", dataset="synthetic-dev-data", gpu_count=1))
+    except requests.HTTPError as exc:
+        rsp = getattr(exc, "response", None)
+        data = rsp.json() if rsp is not None and rsp.content else {"error": str(exc)}
+        if rsp is not None and rsp.status_code == 429 and data.get("error") == "gpu_quota_exceeded":
+            pp({"status": "expected_policy_enforcement", "detail": data, "actor": data.get("actor", "developer01")})
+            return
+        raise
+
 def users_cmd(args): ensure_default_user(); pp({"users": list_users()})
 def register_user_cmd(args): pp(reg_user_local(args.user)); _audit("user_registered", user=args.user)
 def disable_user_cmd(args): pp(set_user_status(args.user, "disabled") or {"error":"user_not_found"}); _audit("user_disabled", user=args.user)
@@ -156,7 +168,7 @@ def demo_full(args):
     bootstrap_device_registry_cmd(args)
     login(argparse.Namespace(auto=True))
     obo_build(args)
-    gpu_submit(argparse.Namespace(model="demo-transformer", dataset="synthetic-dev-data", gpu_count=1))
+    _gpu_submit_for_demo()
     gpu_jobs(args)
     refresh(args)
     refresh(args)
@@ -194,7 +206,7 @@ def main():
     sub.add_parser("deploy-prod").set_defaults(func=deploy_prod)
     q=sub.add_parser("gpu-quota-update"); q.add_argument("--subject", default="developer01"); q.add_argument("--quota", type=int, default=3); q.set_defaults(func=gpu_quota_update)
     ra=sub.add_parser("register-agent"); ra.add_argument("--agent-id", default="agent-gpu-planner-dev"); ra.add_argument("--gpu-quota-max-jobs", type=int, default=1); ra.set_defaults(func=register_agent)
-    sub.add_parser("agent-comment").set_defaults(func=agent_comment); sub.add_parser("agent-gpu-submit").set_defaults(func=agent_gpu_submit)
+    sub.add_parser("agent-comment").set_defaults(func=agent_comment); ags=sub.add_parser("agent-gpu-submit"); ags.add_argument("--agent-id", default="agent-gpu-planner-dev"); ags.set_defaults(func=agent_gpu_submit)
     a=sub.add_parser("audit"); a.add_argument("--event-type"); a.add_argument("--user"); a.add_argument("--agent-id"); a.set_defaults(func=audit)
     d=sub.add_parser("device-status"); d.add_argument("--device-id", required=True); d.set_defaults(func=device_status)
     dis=sub.add_parser("disable-agent"); dis.add_argument("--agent-id", required=True); dis.set_defaults(func=disable_agent)
