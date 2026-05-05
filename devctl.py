@@ -27,6 +27,7 @@ TOKEN_URL = "http://127.0.0.1:8000"
 API_URL = "http://127.0.0.1:9000"
 CLI_STATE = STATE_DIR / "devctl_tokens.json"
 AUDIT_DB = STATE_DIR / "audit.json"
+AUDIT_LOG_JSONL = STATE_DIR / "audit_log.jsonl"
 
 
 def pp(obj): print(json.dumps(obj, indent=2, sort_keys=True))
@@ -130,6 +131,15 @@ def audit(args):
     if getattr(args, "agent_id", None): events = [e for e in events if e.get("agent_id") == args.agent_id]
     pp(events)
 
+def audit_tail(args):
+    limit = int(getattr(args, "limit", 20))
+    if not AUDIT_LOG_JSONL.exists():
+        pp({"events": [], "note": "audit log file not found"})
+        return
+    lines = AUDIT_LOG_JSONL.read_text().splitlines()[-limit:]
+    events = [json.loads(line) for line in lines if line.strip()]
+    pp(events)
+
 
 def _agent_gpu_submit_for_demo(agent_id):
     try:
@@ -205,6 +215,27 @@ def demo_enterprise(args):
     audit(argparse.Namespace(event_type=None, user=None, agent_id=None))
     _audit("demo_enterprise_completed")
 
+def demo_failure_disabled_agent(args):
+    bootstrap_device_registry_cmd(args)
+    ensure_default_user()
+    agent_id = f"agent-failure-disabled-{now()}"
+    register_agent(argparse.Namespace(agent_id=agent_id, gpu_quota_max_jobs=2))
+    disable_agent(argparse.Namespace(agent_id=agent_id))
+    try:
+        agent_gpu_submit(argparse.Namespace(agent_id=agent_id))
+    except requests.HTTPError as exc:
+        rsp = exc.response
+        pp({"status": "expected_denied", "http_status": rsp.status_code, "response": rsp.json(), "agent_id": agent_id})
+
+def demo_failure_scope_denied(args):
+    login(argparse.Namespace(auto=True))
+    token = state().get("access_token")
+    r = requests.post(f"{TOKEN_URL}/obo/exchange", headers=proof_headers(token, "POST", "/obo/exchange"), json={"audience": INTERNAL_API_AUD, "scopes": ["admin.root"]})
+    if r.status_code >= 400:
+        pp({"status": "expected_scope_denied", "http_status": r.status_code, "response": r.json()})
+        return
+    pp({"error": "unexpected_success", "response": r.json()})
+
 def main():
     p=argparse.ArgumentParser(); sub=p.add_subparsers(dest="cmd", required=True)
     s=sub.add_parser("login"); s.add_argument("--auto", action="store_true"); s.set_defaults(func=login)
@@ -217,6 +248,7 @@ def main():
     ac=sub.add_parser("agent-comment"); ac.add_argument("--agent-id", default="agent-gpu-planner-dev"); ac.set_defaults(func=agent_comment)
     ags=sub.add_parser("agent-gpu-submit"); ags.add_argument("--agent-id", default="agent-gpu-planner-dev"); ags.set_defaults(func=agent_gpu_submit)
     a=sub.add_parser("audit"); a.add_argument("--event-type"); a.add_argument("--user"); a.add_argument("--agent-id"); a.set_defaults(func=audit)
+    at=sub.add_parser("audit-tail"); at.add_argument("--limit", type=int, default=20); at.set_defaults(func=audit_tail)
     d=sub.add_parser("device-status"); d.add_argument("--device-id", required=True); d.set_defaults(func=device_status)
     dis=sub.add_parser("disable-agent"); dis.add_argument("--agent-id", required=True); dis.set_defaults(func=disable_agent)
     en=sub.add_parser("enable-agent"); en.add_argument("--agent-id", required=True); en.set_defaults(func=enable_agent)
@@ -232,6 +264,8 @@ def main():
     sub.add_parser("agents").set_defaults(func=agents_cmd); rac=sub.add_parser("rotate-agent-cert"); rac.add_argument("--agent-id", required=True); rac.set_defaults(func=rotate_agent_cert)
     ast=sub.add_parser("agent-status"); ast.add_argument("--agent-id", required=True); ast.set_defaults(func=agent_status)
     sub.add_parser("demo-full").set_defaults(func=demo_full); sub.add_parser("demo-enterprise").set_defaults(func=demo_enterprise)
+    sub.add_parser("demo-failure-disabled-agent").set_defaults(func=demo_failure_disabled_agent)
+    sub.add_parser("demo-failure-scope-denied").set_defaults(func=demo_failure_scope_denied)
     args=p.parse_args(); args.func(args)
 
 if __name__ == '__main__':

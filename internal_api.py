@@ -13,6 +13,7 @@ from token_utils import (
     decode_cert_header,
     has_scopes,
     validate_sender_constrained_proof,
+    write_audit_event,
 )
 
 GPU_JOBS = []
@@ -88,6 +89,7 @@ class Handler(BaseHTTPRequestHandler):
             )
             cert_bound = True
         except Exception as e:
+            write_audit_event("certificate_binding_failed", {"decision": "deny", "reason": str(e), "request_path": self.route_path()})
             raise PermissionError(str(e))
 
         if not has_scopes(claims, scopes):
@@ -169,9 +171,12 @@ class Handler(BaseHTTPRequestHandler):
                 if not ok: return self.send_json({"error": reason}, 403)
                 active = [j for j in GPU_JOBS if j["owner"] == actor and j["state"] in {"queued", "running"}]
                 qok, qreason, limit = QM.allow_gpu(actor, len(active))
-                if not qok: return self.send_json({"error": qreason, "actor": actor, "max_jobs": limit}, 429)
+                if not qok:
+                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": qreason, "actor": actor, "user": c.get("sub"), "agent_id": c.get("agent_id"), "scopes": c.get("scope")})
+                    return self.send_json({"error": qreason, "actor": actor, "max_jobs": limit}, 429)
                 job = {"job_id": f"gpu-job-{len(GPU_JOBS)+1:04d}", "owner": actor, "model": body.get("model", "demo-transformer"), "dataset": body.get("dataset", "synthetic-dev-data"), "gpu_count": int(body.get("gpu_count", 1)), "state": "queued"}
                 GPU_JOBS.append(job)
+                write_audit_event("gpu_submit_allowed", {"decision": "allow", "actor": actor, "user": c.get("sub"), "agent_id": c.get("agent_id"), "token_id": c.get("jti"), "scopes": c.get("scope")})
                 return self.send_json({"result": "GPU job submitted", "job": job})
 
             if p == "/gpu/quota/update":

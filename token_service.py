@@ -8,7 +8,7 @@ from token_utils import (
     AGENT_CERT_PATH, AGENT_TOKEN_TTL_SECONDS, ACCESS_TOKEN_TTL_SECONDS, DEVICE_CERT_PATH, INTERNAL_API_AUD,
     ISSUER, ISSUER_URL, ISSUER_ID, REGION, REFRESH_TOKEN_TTL_SECONDS, STEP_UP_TOKEN_TTL_SECONDS, TOKEN_SERVICE_AUD,
     cert_thumbprint_sha256_pem, cert_to_pem_string, decode_and_validate_jwt, decode_cert_header, issue_jwt, json_load, json_save,
-    jwks, now, scopes_from_claims, STATE_DIR, validate_sender_constrained_proof
+    jwks, now, scopes_from_claims, STATE_DIR, validate_sender_constrained_proof, write_audit_event
 )
 
 REFRESH_DB = STATE_DIR / "refresh_tokens.json"
@@ -25,6 +25,7 @@ def audit(event, **fields):
     events = db(AUDIT_DB, [])
     fields.update({"event_id":str(uuid.uuid4()),"event_type": event, "timestamp": now(),"region":REGION,"issuer_id":ISSUER_ID,"decision":fields.get("decision","allow")})
     events.append(fields); save(AUDIT_DB, events[-2000:])
+    write_audit_event(event, fields)
 
 def new_refresh_record(user, client_id, scopes, cert_thumbprint, family_id=None, actor_type="user"):
     token = secrets.token_urlsafe(48); records = db(REFRESH_DB, {})
@@ -146,15 +147,24 @@ class Handler(BaseHTTPRequestHandler):
         audit("token_refreshed", user=rec["user"], family_id=rec["family_id"])
         return self.send_json({"access_token": access, "refresh_token": new_rt, "token_type":"Bearer", "expires_in": ACCESS_TOKEN_TTL_SECONDS})
     def obo_exchange(self, body):
-        incoming = bearer(self.headers); requested = body.get("scopes", ["build.read"]); target_aud = body.get("audience", INTERNAL_API_AUD)
+        incoming = bearer(self.headers); requested = body.get("scopes", ["build.read"]); target_aud = body.get("audience", INTERNAL_API_AUD); agent_id = body.get("agent_id")
         try:
             claims = decode_and_validate_jwt(incoming, TOKEN_SERVICE_AUD)
             validate_sender_constrained_proof(claims, decode_cert_header(self.headers.get("X-Client-Cert", "")), self.headers.get("X-Proof-Signature"), incoming, "POST", "/obo/exchange")
             if "obo.exchange" not in scopes_from_claims(claims): raise ValueError("missing obo.exchange scope")
-            allowed = scopes_from_claims(claims)
-            if not set(requested).issubset(allowed): raise ValueError("requested OBO scopes exceed user/client grant")
-            downstream = issue_jwt(subject=claims["sub"], audience=target_aud, client_id="central-token-service-obo", scopes=requested, actor_type="user", cnf_x5t=(claims.get("cnf") or {}).get("x5t#S256"), extra_claims={"obo": True, "original_client_id": claims.get("client_id"), "device_id": claims.get("device_id"), "auth_strength": claims.get("auth_strength","mfa")})
-            audit("obo_token_issued", user=claims["sub"], scopes=requested, audience=target_aud)
+            user_allowed = scopes_from_claims(claims)
+            agent_allowed = set()
+            if agent_id:
+                agent = db(AGENT_DB, {}).get(agent_id)
+                if not agent or agent.get("status") != "active":
+                    audit("scope_denied", user=claims.get("sub"), agent_id=agent_id, scopes=requested, decision="deny", reason="agent_not_active")
+                    return self.send_json({"error": "scope_not_allowed", "reason": "requested scope is not allowed for this user or agent"}, 403)
+                agent_allowed = set(agent.get("allowed_scopes", []))
+            if not set(requested).issubset(user_allowed) or (agent_id and not set(requested).issubset(agent_allowed)):
+                audit("scope_denied", user=claims.get("sub"), agent_id=agent_id, scopes=requested, decision="deny", reason="requested scope is not allowed for this user or agent")
+                return self.send_json({"error": "scope_not_allowed", "reason": "requested scope is not allowed for this user or agent"}, 403)
+            downstream = issue_jwt(subject=f"agent:{agent_id}" if agent_id else claims["sub"], audience=target_aud, client_id="central-token-service-obo", scopes=requested, actor_type="agent" if agent_id else "user", cnf_x5t=(claims.get("cnf") or {}).get("x5t#S256"), extra_claims={"obo": True, "original_client_id": claims.get("client_id"), "device_id": claims.get("device_id"), "auth_strength": claims.get("auth_strength","mfa"), "act": {"sub": f"user:{claims['sub']}"}, "obo_chain": [f"user:{claims['sub']}", f"agent:{agent_id}" if agent_id else f"user:{claims['sub']}", f"service:{target_aud}"], "target_service": target_aud, "target_action": ",".join(requested), "original_user": claims["sub"], "acting_agent": agent_id, "agent_id": agent_id, "initiating_user": claims["sub"], "delegation_type": "on_behalf_of"})
+            audit("obo_token_issued", user=claims["sub"], agent_id=agent_id, scopes=requested, audience=target_aud)
             return self.send_json({"access_token": downstream, "token_type":"Bearer", "expires_in": ACCESS_TOKEN_TTL_SECONDS})
         except Exception as e: audit("obo_failed", reason=str(e)); return self.send_json({"error": str(e)}, 401)
     def stepup(self, body):
@@ -191,7 +201,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"error":"agent_not_found"}, 404)
         agents[aid]["status"] = status
         save(AGENT_DB, agents)
-        audit("agent_status_changed", agent_id=aid, reason=status)
+        audit("agent_disabled" if status == "disabled" else "agent_enabled", agent_id=aid, reason=status)
         return self.send_json(agents[aid])
 
     def agent_rotate_cert(self, body):
@@ -200,18 +210,24 @@ class Handler(BaseHTTPRequestHandler):
         if aid not in agents: return self.send_json({"error":"agent_not_found"},404)
         agents[aid]["cert_thumbprint"] = cert_thumbprint_sha256_pem(cert_to_pem_string(AGENT_CERT_PATH))
         save(AGENT_DB, agents)
-        audit("agent_cert_rotated", agent_id=aid)
+        audit("cert_rotated", agent_id=aid)
         return self.send_json(agents[aid])
 
     def introspect(self, body):
         try:
-            claims = decode_and_validate_jwt(body.get("token"), body.get("audience", INTERNAL_API_AUD)); return self.send_json({"active": True, "claims": claims})
-        except Exception as e: return self.send_json({"active": False, "error": str(e)})
+            claims = decode_and_validate_jwt(body.get("token"), body.get("audience", INTERNAL_API_AUD))
+            audit("token_introspected", user=claims.get("sub"), token_id=claims.get("jti"), scopes=claims.get("scope"))
+            return self.send_json({"active": True, "claims": claims})
+        except Exception as e:
+            audit("token_introspected", decision="deny", reason=str(e))
+            return self.send_json({"active": False, "error": str(e)})
     def revoke(self, body):
         fam = body.get("family_id"); records = db(REFRESH_DB, {}); count = 0
         for r in records.values():
             if fam is None or r.get("family_id") == fam: r["revoked"] = True; count += 1
-        save(REFRESH_DB, records); audit("refresh_tokens_revoked", count=count, family_id=fam); return self.send_json({"revoked_count": count})
+        save(REFRESH_DB, records)
+        audit("token_revoked", count=count, family_id=fam)
+        return self.send_json({"revoked_count": count})
 
 if __name__ == "__main__":
     print("Centralized token service running on http://127.0.0.1:8000")
