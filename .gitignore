@@ -1,0 +1,30 @@
+pki/
+.venv/
+__pycache__/
+*.pyc
+
+# Environment files
+.env
+.env.*
+*.env
+
+# Token/state files
+tokens.json
+refresh_tokens.json
+devctl_tokens.json
+*.token
+
+# Logs
+*.log
+logs/
+
+# Caches
+.cache/
+.pytest_cache/
+.mypy_cache/
+
+# Local runtime/demo state
+.state/
+venv/
+__pycache__/
+*.pyc

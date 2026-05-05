@@ -1,0 +1,26 @@
+policies:
+  gpu.quota.update:
+    allowed_actor_types: [user]
+    require_step_up_mfa: true
+    require_pim: true
+    require_approval_id: true
+    require_device_managed: true
+    require_cert_bound_token: true
+    max_token_ttl_seconds: 180
+  gpu.job.submit:
+    allowed_actor_types: [user, agent]
+    require_cert_bound_token: true
+    require_device_managed: true
+    max_gpu_count: 8
+  deploy.prod:
+    allowed_actor_types: [user]
+    require_step_up_mfa: true
+    require_pim: true
+    require_approval_id: true
+    require_device_managed: true
+    require_cert_bound_token: true
+  agent.token:
+    allowed_actor_types: [agent]
+    require_agent_id: true
+    require_initiating_user: true
+    require_cert_bound_token: true
