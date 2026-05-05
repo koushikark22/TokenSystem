@@ -153,7 +153,6 @@ class Handler(BaseHTTPRequestHandler):
                 c = self.validate(["deploy.prod"], require_pim=True)
                 ok_posture, reason = posture_allowed_for_action(c, "deploy.prod")
                 if not ok_posture:
-                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": reason, "user": c.get("sub"), "agent_id": c.get("agent_id")})
                     return self.send_json({"error": reason}, 403)
                 ok, reason = evaluate_policy("deploy.prod", self._policy_context(c, body))
                 if not ok: return self.send_json({"error": reason}, 403)
