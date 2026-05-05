@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent
 PKI_DIR = ROOT / "pki"
 STATE_DIR = ROOT / ".state"
 STATE_DIR.mkdir(exist_ok=True)
+AUDIT_LOG_PATH = STATE_DIR / "audit_log.jsonl"
 
 REGION = os.getenv("REGION", "local")
 ISSUER_ID = os.getenv("ISSUER_ID", "issuer-local-01")
@@ -185,3 +186,22 @@ def json_load(path: Path, default: Any):
     except Exception: return default
 
 def json_save(path: Path, data: Any): path.write_text(json.dumps(data, indent=2, sort_keys=True))
+
+
+def write_audit_event(event_type: str, details: Dict[str, Any] | None = None):
+    details = details or {}
+    event = {
+        "timestamp": now(),
+        "event": event_type,
+        "actor": details.get("actor") or details.get("user") or details.get("sub"),
+        "user": details.get("user"),
+        "agent_id": details.get("agent_id"),
+        "token_id": details.get("token_id") or details.get("jti"),
+        "scopes": details.get("scopes") or details.get("scope"),
+        "decision": details.get("decision"),
+        "reason": details.get("reason"),
+        "request_id": details.get("request_id") or details.get("correlation_id"),
+        "details": details,
+    }
+    with AUDIT_LOG_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(event, sort_keys=True) + "\n")
