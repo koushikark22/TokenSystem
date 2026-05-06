@@ -252,7 +252,7 @@ def audit_verify(args):
     lines = AUDIT_LOG_JSONL.read_text().splitlines()
     for idx, line in enumerate(lines, start=1):
         evt = json.loads(line)
-        payload = f"{evt.get('audit_event_id','')}|{evt.get('timestamp')}|{evt.get('event_type') or evt.get('event')}|{evt.get('decision_id','')}|{prev}"
+        payload = f"{evt.get('audit_event_id','')}|{evt.get('timestamp')}|{evt.get('event_type') or evt.get('event')}|{evt.get('decision_id') or ''}|{prev}"
         expected = hashlib.sha256(payload.encode()).hexdigest()
         if evt.get("previous_hash") != prev or evt.get("event_hash") != expected:
             first_bad = idx
