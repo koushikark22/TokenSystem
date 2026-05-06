@@ -90,8 +90,9 @@ def obo_build(args):
 
 def gpu_submit(args):
     token = state().get("access_token")
-    r = requests.post(f"{TOKEN_URL}/obo/exchange", headers=proof_headers(token, "POST", "/obo/exchange"), json={"audience": INTERNAL_API_AUD, "scopes": ["gpu.job.submit"]}); r.raise_for_status()
-    a = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(r.json()["access_token"], "POST", "/gpu/jobs/submit"), json={"model": args.model, "dataset": args.dataset, "gpu_count": args.gpu_count}); pp(a.json()); a.raise_for_status()
+    gpu_context = {"job_id": f"job-{now()}", "dataset_id": args.dataset, "gpu_action": "submit", "gpu_quota": max(int(args.gpu_count), 1), "environment": "dev", "model_id": args.model, "max_runtime_seconds": 300}
+    r = requests.post(f"{TOKEN_URL}/obo/exchange", headers=proof_headers(token, "POST", "/obo/exchange"), json={"audience": INTERNAL_API_AUD, "scopes": ["gpu.job.submit"], "gpu_context": gpu_context}); r.raise_for_status()
+    a = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(r.json()["access_token"], "POST", "/gpu/jobs/submit"), json={"model": args.model, "model_id": args.model, "dataset": args.dataset, "dataset_id": args.dataset, "gpu_count": args.gpu_count, "job_id": gpu_context["job_id"], "gpu_action": "submit", "gpu_quota": gpu_context["gpu_quota"], "environment": "dev"}); pp(a.json()); a.raise_for_status()
 
 def gpu_jobs(args):
     token = state().get("access_token")
@@ -221,8 +222,12 @@ def demo_action_specific_gpu_token(args):
     deny_mismatch = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(down, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "model_id": "model-a", "dataset": "wrong", "gpu_count": 1, "job_id": job_id, "dataset_id": "wrong", "gpu_action": "submit", "gpu_quota": 1, "environment": "dev"})
     deny_quota = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(down, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "model_id": "model-a", "dataset": "synthetic-dev-data", "gpu_count": 2, "job_id": job_id, "dataset_id": dataset_id, "gpu_action": "submit", "gpu_quota": 1, "environment": "dev"})
     deny_env = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(down, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "model_id": "model-a", "dataset": "synthetic-dev-data", "gpu_count": 1, "job_id": job_id, "dataset_id": dataset_id, "gpu_action": "submit", "gpu_quota": 1, "environment": "prod"})
+    generic = requests.post(f"{TOKEN_URL}/obo/exchange", headers=proof_headers(token, "POST", "/obo/exchange"), json={"audience": INTERNAL_API_AUD, "scopes": ["gpu.job.submit"]})
+    generic.raise_for_status()
+    generic_token = generic.json()["access_token"]
+    deny_missing_claims = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(generic_token, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "gpu_count": 1, "job_id": job_id, "dataset_id": dataset_id, "gpu_action": "submit", "environment": "dev"})
     _audit("gpu_action_specific_demo", **evidence)
-    pp({"token_claims": _decode_jwt_claims_unverified(down), "introspect": introspected, "allow_status": allow.status_code, "deny_job_reason": deny_job.json(), "deny_dataset_reason": deny_mismatch.json(), "deny_quota_reason": deny_quota.json(), "deny_environment_reason": deny_env.json(), "evidence": evidence})
+    pp({"token_claims": _decode_jwt_claims_unverified(down), "introspect": introspected, "allow_status": allow.status_code, "deny_job_reason": deny_job.json(), "deny_dataset_reason": deny_mismatch.json(), "deny_quota_reason": deny_quota.json(), "deny_environment_reason": deny_env.json(), "deny_missing_claims_reason": deny_missing_claims.json(), "evidence": evidence})
 
 
 def audit_verify(args):
