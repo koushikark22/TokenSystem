@@ -179,6 +179,7 @@ def demo_conditional_rotation(args):
     evidence = _policy_evidence("conditional_rotation_denied", decision="deny", risk_level="high")
     _audit("conditional_rotation_denied", **evidence)
     pp({"trusted_refresh": token_output(trusted.json()), "denied_status": denied.status_code, "denied_body": denied.json(), "evidence": evidence})
+    set_device_status("linux-laptop-001", "active")
 
 
 def demo_refresh_replay(args):
@@ -211,11 +212,14 @@ def demo_device_attested_renewal(args):
     err = "device_untrusted" if bad.status_code == 403 else "device_attestation_required"
     _audit("device_attestation_denied", **_policy_evidence(err, decision="deny", risk_level="high"))
     pp({"simulated_attestation": simulated_attestation, "trusted_refresh": token_output(good.json()), "untrusted_status": bad.status_code, "untrusted_error": err, "upstream": bad.json()})
+    set_device_status("linux-laptop-001", "active")
 
 
 def demo_action_specific_gpu_token(args):
     # Demo note: JWT keeps action-specific claims visible for interview walkthroughs.
     # In opaque-token production designs, the same metadata can be server-side and enforced through introspection.
+    set_device_status("linux-laptop-001", "active")
+    set_attestation("linux-laptop-001", cert_thumbprint_sha256_pem(cert_to_pem_string(DEVICE_CERT_PATH)), trusted=True, ttl_seconds=300)
     login(argparse.Namespace(auto=True))
     token = state().get("access_token")
     job_id, dataset_id = "job-001", "dataset-001"
@@ -257,18 +261,27 @@ def audit_verify(args):
     pp({"valid": first_bad is None, "first_bad_event": first_bad})
 
 def demo_jwt_replay_kill_switch(args):
+    set_device_status("linux-laptop-001", "active")
     login(argparse.Namespace(auto=True))
     set_attestation("linux-laptop-001", cert_thumbprint_sha256_pem(cert_to_pem_string(DEVICE_CERT_PATH)), trusted=True, ttl_seconds=300)
     token = state().get("access_token")
     good = requests.post(f"{TOKEN_URL}/obo/exchange", headers=proof_headers(token, "POST", "/obo/exchange"), json={"audience": INTERNAL_API_AUD, "scopes": ["gpu.job.submit"], "gpu_context": {"job_id": "replay-job-1", "dataset_id": "replay-ds-1", "gpu_action": "submit", "gpu_quota": 1, "environment": "dev", "model_id": "demo-transformer", "max_runtime_seconds": 120, "policy_id": "gpu.replay.policy", "policy_version": "v1", "decision_id": f"dec-{now()}", "risk_level": "low"}})
     good.raise_for_status()
     jwt = good.json()["access_token"]
-    first = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(jwt, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "model_id": "demo-transformer", "dataset": "replay-ds-1", "dataset_id": "replay-ds-1", "gpu_count": 1, "job_id": "replay-job-1", "gpu_action": "submit", "environment": "dev"})
-    first.raise_for_status()
+    submit_body = {"model": "demo-transformer", "model_id": "demo-transformer", "dataset": "replay-ds-1", "dataset_id": "replay-ds-1", "gpu_count": 1, "job_id": "replay-job-1", "gpu_action": "submit", "environment": "dev"}
+    first = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(jwt, "POST", "/gpu/jobs/submit"), json=submit_body)
+    if first.status_code != 200:
+        raise RuntimeError(f"demo_jwt_replay_kill_switch first submit must succeed, got {first.status_code}: {first.text}")
     introspect = requests.post(f"{TOKEN_URL}/introspect", json={"token": jwt, "audience": INTERNAL_API_AUD})
     jti = introspect.json().get("jti")
     revoke_jti(jti, "demo_jwt_replay_kill_switch")
-    second = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(jwt, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "dataset": "synthetic-dev-data", "gpu_count": 1})
+    second = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(jwt, "POST", "/gpu/jobs/submit"), json=submit_body)
+    if second.status_code == 200:
+        raise RuntimeError("demo_jwt_replay_kill_switch second submit unexpectedly succeeded; expected jti replay/revocation deny")
+    second_error = (second.json() or {}).get("error")
+    wrong_reasons = {"action_specific_claims_required", "job_id_mismatch", "dataset_id_mismatch", "environment_mismatch", "model_id_mismatch", "gpu_quota_exceeded"}
+    if second_error in wrong_reasons:
+        raise RuntimeError(f"demo_jwt_replay_kill_switch denied for wrong reason: {second_error}; expected revocation/replay/jti deny")
     pp({"first_submit": first.status_code, "second_submit": second.status_code, "second_body": second.json(), "jti": jti})
 
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+rm -f .state/audit_log.jsonl .state/audit.json .state/devctl_tokens.json .state/jti_denylist.json
 python token_service.py >/tmp/token_service.validate.log 2>&1 &
 TS_PID=$!
 python internal_api.py >/tmp/internal_api.validate.log 2>&1 &
