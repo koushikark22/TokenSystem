@@ -202,12 +202,13 @@ def demo_action_specific_gpu_token(args):
     token = state().get("access_token")
     job_id, dataset_id = "job-001", "dataset-001"
     evidence = _policy_evidence("gpu_exact_match_required")
-    obo = requests.post(f"{TOKEN_URL}/obo/exchange", headers=proof_headers(token, "POST", "/obo/exchange"), json={"audience": INTERNAL_API_AUD, "scopes": ["gpu.job.submit"]})
+    action_claims = {"job_id": job_id, "dataset_id": dataset_id, "gpu_action": "submit", "gpu_quota": 1, "environment": "dev", "policy_id": evidence["policy_id"], "decision_id": evidence["decision_id"], "risk_level": evidence["risk_level"], "max_runtime_seconds": 120}
+    obo = requests.post(f"{TOKEN_URL}/obo/exchange", headers=proof_headers(token, "POST", "/obo/exchange"), json={"audience": INTERNAL_API_AUD, "scopes": ["gpu.job.submit"], "action_claims": action_claims})
     obo.raise_for_status()
     down = obo.json()["access_token"]
     allow = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(down, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "dataset": "synthetic-dev-data", "gpu_count": 1, "job_id": job_id, "dataset_id": dataset_id, "gpu_action": "submit", "gpu_quota": 1, "environment": "dev"})
-    deny_mismatch = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(down, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "dataset": "wrong", "gpu_count": 1, "job_id": "job-999", "dataset_id": "wrong"})
-    deny_quota = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(down, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "dataset": "synthetic-dev-data", "gpu_count": 1})
+    deny_mismatch = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(down, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "dataset": "wrong", "gpu_count": 1, "job_id": "job-999", "dataset_id": "wrong", "gpu_action": "submit", "gpu_quota": 1, "environment": "dev"})
+    deny_quota = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(down, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "dataset": "synthetic-dev-data", "gpu_count": 2, "job_id": job_id, "dataset_id": dataset_id, "gpu_action": "submit", "gpu_quota": 2, "environment": "dev"})
     _audit("gpu_action_specific_demo", **evidence)
     pp({"allow_status": allow.status_code, "mismatch_status": deny_mismatch.status_code, "quota_status": deny_quota.status_code, "evidence": evidence})
 

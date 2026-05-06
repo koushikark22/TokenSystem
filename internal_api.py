@@ -174,6 +174,18 @@ class Handler(BaseHTTPRequestHandler):
                 if c.get("dataset_id") and body.get("dataset_id") != c.get("dataset_id"):
                     write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "dataset_id_mismatch"})
                     return self.send_json({"error": "dataset_id_mismatch"}, 403)
+                if c.get("gpu_action") and body.get("gpu_action") != c.get("gpu_action"):
+                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "gpu_action_mismatch"})
+                    return self.send_json({"error": "gpu_action_mismatch"}, 403)
+                if c.get("environment") and body.get("environment") != c.get("environment"):
+                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "environment_mismatch"})
+                    return self.send_json({"error": "environment_mismatch"}, 403)
+                if c.get("gpu_quota") is not None:
+                    claim_quota = int(c.get("gpu_quota"))
+                    requested_quota = int(body.get("gpu_quota", body.get("gpu_count", 1)))
+                    if requested_quota != claim_quota or int(body.get("gpu_count", 1)) > claim_quota:
+                        write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "gpu_quota_exceeded_or_mismatch"})
+                        return self.send_json({"error": "gpu_quota_exceeded_or_mismatch"}, 403)
                 for key in [f"user:{c.get('sub')}", f"device:{c.get('device_id')}", f"agent:{c.get('agent_id')}", "scope:gpu.job.submit"]:
                     ok, reason = RL.allow(key)
                     if not ok: return self.send_json({"error": reason, "key": key}, 429)
