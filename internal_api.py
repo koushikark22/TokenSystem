@@ -14,6 +14,7 @@ from token_utils import (
     has_scopes,
     validate_sender_constrained_proof,
     write_audit_event,
+    is_jti_revoked,
 )
 
 GPU_JOBS = []
@@ -74,6 +75,9 @@ class Handler(BaseHTTPRequestHandler):
             raise PermissionError("missing bearer token")
 
         claims = decode_and_validate_jwt(token, INTERNAL_API_AUD)
+        if self.route_path() in {"/gpu/jobs/submit", "/agent/comment"} and is_jti_revoked(claims.get("jti")):
+            write_audit_event("jwt_replay_or_revoked_jti_detected", {"decision": "deny", "reason": "jti_revoked", "jti": claims.get("jti")})
+            raise PermissionError("jwt_replay_or_revoked_jti_detected")
         cert_pem = decode_cert_header(self.headers.get("X-Client-Cert", "")) if self.headers.get("X-Client-Cert") else ""
         computed_thumbprint = cert_thumbprint_sha256_pem(cert_pem) if cert_pem else None
 
@@ -164,6 +168,36 @@ class Handler(BaseHTTPRequestHandler):
                 if not ok_posture:
                     return self.send_json({"error": reason}, 403)
                 actor = actor_from_claims(c)
+                evidence = {"policy_id": c.get("policy_id"), "policy_version": c.get("policy_version"), "decision_id": c.get("decision_id"), "risk_level": c.get("risk_level"), "job_id": c.get("job_id"), "dataset_id": c.get("dataset_id"), "gpu_action": c.get("gpu_action"), "environment": c.get("environment"), "gpu_quota": c.get("gpu_quota"), "model_id": c.get("model_id"), "jti": c.get("jti")}
+                required_claims = ["job_id", "dataset_id", "gpu_action", "gpu_quota", "environment", "policy_id", "policy_version", "decision_id", "risk_level"]
+                missing = [k for k in required_claims if c.get(k) is None]
+                if missing:
+                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "action_specific_claims_required", "missing": missing, "requested_gpu_count": body.get("gpu_count"), **evidence})
+                    return self.send_json({"error": "action_specific_claims_required", "missing": missing}, 403)
+                if c.get("job_id") and body.get("job_id") != c.get("job_id"):
+                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "job_id_mismatch", **evidence})
+                    return self.send_json({"error": "job_id_mismatch"}, 403)
+                if c.get("dataset_id") and body.get("dataset_id") != c.get("dataset_id"):
+                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "dataset_id_mismatch", **evidence})
+                    return self.send_json({"error": "dataset_id_mismatch"}, 403)
+                if c.get("gpu_action") and body.get("gpu_action") != c.get("gpu_action"):
+                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "gpu_action_mismatch", **evidence})
+                    return self.send_json({"error": "gpu_action_mismatch"}, 403)
+                if c.get("environment") and body.get("environment") != c.get("environment"):
+                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "environment_mismatch", **evidence})
+                    return self.send_json({"error": "environment_mismatch"}, 403)
+                if c.get("gpu_quota") is not None:
+                    claim_quota = int(c.get("gpu_quota"))
+                    if int(body.get("gpu_count", 1)) > claim_quota:
+                        write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "gpu_quota_exceeded", "requested_gpu_count": body.get("gpu_count"), **evidence})
+                        return self.send_json({"error": "gpu_quota_exceeded"}, 403)
+                requested_model = body.get("model_id") or body.get("model")
+                if c.get("model_id") and requested_model != c.get("model_id"):
+                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "model_id_mismatch", **evidence})
+                    return self.send_json({"error": "model_id_mismatch"}, 403)
+                if c.get("max_runtime_seconds") is not None and int(body.get("max_runtime_seconds", c.get("max_runtime_seconds"))) > int(c.get("max_runtime_seconds")):
+                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "runtime_exceeded", **evidence})
+                    return self.send_json({"error": "runtime_exceeded"}, 403)
                 for key in [f"user:{c.get('sub')}", f"device:{c.get('device_id')}", f"agent:{c.get('agent_id')}", "scope:gpu.job.submit"]:
                     ok, reason = RL.allow(key)
                     if not ok: return self.send_json({"error": reason, "key": key}, 429)
@@ -176,7 +210,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"error": qreason, "actor": actor, "max_jobs": limit}, 429)
                 job = {"job_id": f"gpu-job-{len(GPU_JOBS)+1:04d}", "owner": actor, "model": body.get("model", "demo-transformer"), "dataset": body.get("dataset", "synthetic-dev-data"), "gpu_count": int(body.get("gpu_count", 1)), "state": "queued"}
                 GPU_JOBS.append(job)
-                write_audit_event("gpu_submit_allowed", {"decision": "allow", "actor": actor, "user": c.get("sub"), "agent_id": c.get("agent_id"), "token_id": c.get("jti"), "scopes": c.get("scope")})
+                write_audit_event("gpu_submit_allowed", {"decision": "allow", "reason": "action_specific_claims_matched", "actor": actor, "user": c.get("sub"), "agent_id": c.get("agent_id"), "token_id": c.get("jti"), "scopes": c.get("scope"), "requested_gpu_count": body.get("gpu_count"), **evidence})
                 return self.send_json({"result": "GPU job submitted", "job": job})
 
             if p == "/gpu/quota/update":

@@ -8,8 +8,10 @@ from token_utils import (
     AGENT_CERT_PATH, AGENT_TOKEN_TTL_SECONDS, ACCESS_TOKEN_TTL_SECONDS, DEVICE_CERT_PATH, INTERNAL_API_AUD,
     ISSUER, ISSUER_URL, ISSUER_ID, REGION, REFRESH_TOKEN_TTL_SECONDS, STEP_UP_TOKEN_TTL_SECONDS, TOKEN_SERVICE_AUD,
     cert_thumbprint_sha256_pem, cert_to_pem_string, decode_and_validate_jwt, decode_cert_header, issue_jwt, json_load, json_save,
-    jwks, now, scopes_from_claims, STATE_DIR, validate_sender_constrained_proof, write_audit_event
+    jwks, now, scopes_from_claims, STATE_DIR, validate_sender_constrained_proof, write_audit_event, revoke_jti, is_jti_revoked
 )
+from device_attestation import validate_attestation
+import os
 
 REFRESH_DB = STATE_DIR / "refresh_tokens.json"
 AGENT_DB = STATE_DIR / "agents.json"
@@ -26,6 +28,10 @@ def audit(event, **fields):
     fields.update({"event_id":str(uuid.uuid4()),"event_type": event, "timestamp": now(),"region":REGION,"issuer_id":ISSUER_ID,"decision":fields.get("decision","allow")})
     events.append(fields); save(AUDIT_DB, events[-2000:])
     write_audit_event(event, fields)
+
+
+def _decision(reason="ok", decision="allow", risk_level="low"):
+    return {"policy_id": "jwt-demo-policy", "policy_version": "2026.05", "decision_id": f"dec-{uuid.uuid4()}", "decision": decision, "risk_level": risk_level, "reason": reason}
 
 def new_refresh_record(user, client_id, scopes, cert_thumbprint, family_id=None, actor_type="user"):
     token = secrets.token_urlsafe(48); records = db(REFRESH_DB, {})
@@ -118,9 +124,11 @@ class Handler(BaseHTTPRequestHandler):
         if not u or u.get("status")!="active":
             return self.send_json({"error":"user_not_active"},403)
         access = issue_jwt(subject=rec["user"], audience=TOKEN_SERVICE_AUD, client_id=rec["client_id"], scopes=rec["scopes"], actor_type="user", cnf_x5t=rec["device_thumbprint"], extra_claims={"device_id": DEVICE_ID, "auth_strength":"mfa", "idp":"entra-simulated"})
+        evidence = _decision()
+        access = issue_jwt(subject=rec["user"], audience=TOKEN_SERVICE_AUD, client_id=rec["client_id"], scopes=rec["scopes"], actor_type="user", cnf_x5t=rec["device_thumbprint"], extra_claims={"device_id": DEVICE_ID, "auth_strength":"mfa", "idp":"entra-simulated", **evidence})
         refresh = new_refresh_record(rec["user"], rec["client_id"], rec["scopes"], rec["device_thumbprint"])
         del codes[body.get("device_code")]; save(DEVICE_CODE_DB, codes)
-        audit("token_issued", user=rec["user"], actor_type="user", audience=TOKEN_SERVICE_AUD, scope=" ".join(rec["scopes"]), device_id=DEVICE_ID, reason="ok", correlation_id=str(uuid.uuid4()))
+        audit("token_issued", user=rec["user"], actor_type="user", audience=TOKEN_SERVICE_AUD, scope=" ".join(rec["scopes"]), device_id=DEVICE_ID, correlation_id=str(uuid.uuid4()), **evidence)
         return self.send_json({"access_token": access, "refresh_token": refresh, "token_type":"Bearer", "expires_in": ACCESS_TOKEN_TTL_SECONDS})
     def token_refresh(self, body):
         ensure_default_user()
@@ -136,18 +144,31 @@ class Handler(BaseHTTPRequestHandler):
             fam = rec["family_id"]
             for r in records.values():
                 if r.get("family_id") == fam: r["revoked"] = True
-            save(REFRESH_DB, records); audit("refresh_reuse_detected_family_revoked", family_id=fam, user=rec["user"])
-            return self.send_json({"error":"refresh token reuse detected; token family revoked"}, 401)
+            save(REFRESH_DB, records); audit("refresh_replay_detected", family_id=fam, user=rec["user"], **_decision("refresh_replay_detected", "deny", "high"))
+            return self.send_json({"error":"refresh_replay_detected: refresh token reuse detected"}, 401)
+        posture_ok, posture_reason = check_device_posture(DEVICE_ID, rec["cnf_x5t"])
+        if not posture_ok:
+            audit("token_refresh_denied", user=rec["user"], **_decision("conditional_rotation_denied", "deny", "high"))
+            return self.send_json({"error":"conditional_rotation_denied"}, 403)
+        att_ok, att_reason, att = validate_attestation(DEVICE_ID, rec["cnf_x5t"])
+        if ("gpu.job.submit" in rec.get("scopes", [])) and not att_ok:
+            audit("token_refresh_denied", user=rec["user"], **_decision(att_reason, "deny", "high"))
+            return self.send_json({"error": att_reason}, 403)
         if not cert_pem or cert_thumbprint_sha256_pem(cert_pem) != rec["cnf_x5t"] or not verify_proof(cert_pem, proof_sig, rt, "POST", "/token/refresh"):
             return self.send_json({"error":"device proof failed"}, 401)
         rec["used"] = True
         save(REFRESH_DB, records)
-        access = issue_jwt(subject=rec["user"], audience=TOKEN_SERVICE_AUD, client_id=rec["client_id"], scopes=rec["scopes"], actor_type=rec.get("actor_type","user"), cnf_x5t=rec["cnf_x5t"], extra_claims={"device_id": DEVICE_ID, "auth_strength":"mfa", "idp":"entra-simulated"})
+        evidence = _decision("conditional_rotation_allow", "allow", "low")
+        access = issue_jwt(subject=rec["user"], audience=TOKEN_SERVICE_AUD, client_id=rec["client_id"], scopes=rec["scopes"], actor_type=rec.get("actor_type","user"), cnf_x5t=rec["cnf_x5t"], extra_claims={"device_id": DEVICE_ID, "auth_strength":"mfa", "idp":"entra-simulated", "attestation_evidence_id": (att or {}).get("evidence_id"), "device_trust_level": "trusted" if att_ok else "unknown", **evidence})
         new_rt = new_refresh_record(rec["user"], rec["client_id"], rec["scopes"], rec["cnf_x5t"], family_id=rec["family_id"])
-        audit("token_refreshed", user=rec["user"], family_id=rec["family_id"])
+        audit("token_refreshed", user=rec["user"], family_id=rec["family_id"], **evidence)
         return self.send_json({"access_token": access, "refresh_token": new_rt, "token_type":"Bearer", "expires_in": ACCESS_TOKEN_TTL_SECONDS})
     def obo_exchange(self, body):
         incoming = bearer(self.headers); requested = body.get("scopes", ["build.read"]); target_aud = body.get("audience", INTERNAL_API_AUD); agent_id = body.get("agent_id")
+        action_claims = body.get("action_claims", {}) if isinstance(body.get("action_claims", {}), dict) else {}
+        if not action_claims and isinstance(body.get("gpu_context", {}), dict):
+            action_claims = body.get("gpu_context", {})
+        token_profile = body.get("token_profile")
         try:
             claims = decode_and_validate_jwt(incoming, TOKEN_SERVICE_AUD)
             validate_sender_constrained_proof(claims, decode_cert_header(self.headers.get("X-Client-Cert", "")), self.headers.get("X-Proof-Signature"), incoming, "POST", "/obo/exchange")
@@ -163,7 +184,28 @@ class Handler(BaseHTTPRequestHandler):
             if not set(requested).issubset(user_allowed) or (agent_id and not set(requested).issubset(agent_allowed)):
                 audit("scope_denied", user=claims.get("sub"), agent_id=agent_id, scopes=requested, decision="deny", reason="requested scope is not allowed for this user or agent")
                 return self.send_json({"error": "scope_not_allowed", "reason": "requested scope is not allowed for this user or agent"}, 403)
-            downstream = issue_jwt(subject=f"agent:{agent_id}" if agent_id else claims["sub"], audience=target_aud, client_id="central-token-service-obo", scopes=requested, actor_type="agent" if agent_id else "user", cnf_x5t=(claims.get("cnf") or {}).get("x5t#S256"), extra_claims={"obo": True, "original_client_id": claims.get("client_id"), "device_id": claims.get("device_id"), "auth_strength": claims.get("auth_strength","mfa"), "act": {"sub": f"user:{claims['sub']}"}, "obo_chain": [f"user:{claims['sub']}", f"agent:{agent_id}" if agent_id else f"user:{claims['sub']}", f"service:{target_aud}"], "target_service": target_aud, "target_action": ",".join(requested), "original_user": claims["sub"], "acting_agent": agent_id, "agent_id": agent_id, "initiating_user": claims["sub"], "delegation_type": "on_behalf_of"})
+            base_claims = {"obo": True, "original_client_id": claims.get("client_id"), "device_id": claims.get("device_id"), "auth_strength": claims.get("auth_strength","mfa"), "act": {"sub": f"user:{claims['sub']}"}, "obo_chain": [f"user:{claims['sub']}", f"agent:{agent_id}" if agent_id else f"user:{claims['sub']}", f"service:{target_aud}"], "target_service": target_aud, "target_action": ",".join(requested), "original_user": claims["sub"], "acting_agent": agent_id, "agent_id": agent_id, "initiating_user": claims["sub"], "delegation_type": "on_behalf_of"}
+            if "gpu_context" in body and "gpu.job.submit" not in requested:
+                return self.send_json({"error": "invalid_gpu_context", "reason": "gpu_context_requires_gpu_job_submit_scope"}, 400)
+            if "gpu.job.submit" in requested:
+                required_gpu_fields = ["job_id", "dataset_id", "gpu_action", "gpu_quota", "environment"]
+                if action_claims:
+                    missing_gpu = [k for k in required_gpu_fields if action_claims.get(k) in [None, ""]]
+                    if missing_gpu:
+                        return self.send_json({"error": "invalid_gpu_context", "missing": missing_gpu}, 400)
+                for key in ["job_id", "dataset_id", "gpu_action", "gpu_quota", "environment", "model_id", "max_runtime_seconds", "policy_id", "policy_version", "decision_id", "risk_level"]:
+                    if key in action_claims:
+                        base_claims[key] = action_claims[key]
+                if action_claims:
+                    base_claims.setdefault("policy_id", "gpu.action.policy")
+                    base_claims.setdefault("policy_version", "2026.05")
+                    base_claims.setdefault("decision_id", f"dec-{uuid.uuid4()}")
+                    base_claims.setdefault("risk_level", "low")
+                    base_claims.setdefault("reason", "action_specific_gpu_token_issued")
+                if token_profile == "action_specific_gpu":
+                    base_claims["token_profile"] = token_profile
+            ttl_seconds = min(ACCESS_TOKEN_TTL_SECONDS, 180) if action_claims else ACCESS_TOKEN_TTL_SECONDS
+            downstream = issue_jwt(subject=f"agent:{agent_id}" if agent_id else claims["sub"], audience=target_aud, client_id="central-token-service-obo", scopes=requested, actor_type="agent" if agent_id else "user", ttl_seconds=ttl_seconds, cnf_x5t=(claims.get("cnf") or {}).get("x5t#S256"), extra_claims=base_claims)
             audit("obo_token_issued", user=claims["sub"], agent_id=agent_id, scopes=requested, audience=target_aud)
             return self.send_json({"access_token": downstream, "token_type":"Bearer", "expires_in": ACCESS_TOKEN_TTL_SECONDS})
         except Exception as e: audit("obo_failed", reason=str(e)); return self.send_json({"error": str(e)}, 401)
@@ -216,8 +258,10 @@ class Handler(BaseHTTPRequestHandler):
     def introspect(self, body):
         try:
             claims = decode_and_validate_jwt(body.get("token"), body.get("audience", INTERNAL_API_AUD))
+            if is_jti_revoked(claims.get("jti")):
+                return self.send_json({"active": False, "error": "jti_revoked"})
             audit("token_introspected", user=claims.get("sub"), token_id=claims.get("jti"), scopes=claims.get("scope"))
-            return self.send_json({"active": True, "claims": claims})
+            return self.send_json({"active": True, "sub": claims.get("sub"), "aud": claims.get("aud"), "scope": claims.get("scope"), "jti": claims.get("jti"), "device_id": claims.get("device_id"), "agent_id": claims.get("agent_id"), "policy_id": claims.get("policy_id"), "decision_id": claims.get("decision_id"), "risk_level": claims.get("risk_level")})
         except Exception as e:
             audit("token_introspected", decision="deny", reason=str(e))
             return self.send_json({"active": False, "error": str(e)})
@@ -230,6 +274,10 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_json({"revoked_count": count})
 
 if __name__ == "__main__":
+    if os.getenv("ENV") == "prod":
+        from token_utils import UNSAFE_DEV_MODE_CERT_HEADER, UNSAFE_ALLOW_LOCAL_SIGNING_CERT_FALLBACK, ACCESS_TOKEN_TTL_SECONDS
+        if UNSAFE_DEV_MODE_CERT_HEADER or UNSAFE_ALLOW_LOCAL_SIGNING_CERT_FALLBACK or ACCESS_TOKEN_TTL_SECONDS > 900:
+            raise SystemExit("Production safety guard failed")
     print("Centralized token service running on http://127.0.0.1:8000")
     HTTPServer(("127.0.0.1", 8000), Handler).serve_forever()
 

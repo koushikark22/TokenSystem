@@ -1,7 +1,9 @@
 import argparse
+import base64
 import json
 import os
 import sys
+import hashlib
 
 import requests
 
@@ -19,9 +21,11 @@ from token_utils import (
     json_load,
     json_save,
     now,
+    revoke_jti,
     sign_proof,
 )
 from user_registry import ensure_default_user, list_users, register_user as reg_user_local, set_user_status
+from device_attestation import set_attestation
 
 TOKEN_URL = "http://127.0.0.1:8000"
 API_URL = "http://127.0.0.1:9000"
@@ -53,6 +57,14 @@ def token_output(token_response):
         return token_response
     return {"access_token": "issued", "access_token_preview": token_preview(token_response.get("access_token", "")), "refresh_token": "stored_locally" if token_response.get("refresh_token") else "", "expires_in": token_response.get("expires_in"), "token_type": token_response.get("token_type")}
 
+
+def _decode_jwt_claims_unverified(token: str):
+    parts = token.split(".")
+    if len(parts) != 3:
+        return {}
+    payload = parts[1] + "=" * (-len(parts[1]) % 4)
+    return json.loads(base64.urlsafe_b64decode(payload.encode()).decode())
+
 def proof_headers(access_token, method, path, *, agent=False):
     cert_path = AGENT_CERT_PATH if agent else DEVICE_CERT_PATH
     key_path = AGENT_KEY_PATH if agent else DEVICE_KEY_PATH
@@ -79,8 +91,9 @@ def obo_build(args):
 
 def gpu_submit(args):
     token = state().get("access_token")
-    r = requests.post(f"{TOKEN_URL}/obo/exchange", headers=proof_headers(token, "POST", "/obo/exchange"), json={"audience": INTERNAL_API_AUD, "scopes": ["gpu.job.submit"]}); r.raise_for_status()
-    a = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(r.json()["access_token"], "POST", "/gpu/jobs/submit"), json={"model": args.model, "dataset": args.dataset, "gpu_count": args.gpu_count}); pp(a.json()); a.raise_for_status()
+    gpu_context = {"job_id": f"job-{now()}", "dataset_id": args.dataset, "gpu_action": "submit", "gpu_quota": max(int(args.gpu_count), 1), "environment": "dev", "model_id": args.model, "max_runtime_seconds": 300}
+    r = requests.post(f"{TOKEN_URL}/obo/exchange", headers=proof_headers(token, "POST", "/obo/exchange"), json={"audience": INTERNAL_API_AUD, "scopes": ["gpu.job.submit"], "gpu_context": gpu_context}); r.raise_for_status()
+    a = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(r.json()["access_token"], "POST", "/gpu/jobs/submit"), json={"model": args.model, "model_id": args.model, "dataset": args.dataset, "dataset_id": args.dataset, "gpu_count": args.gpu_count, "job_id": gpu_context["job_id"], "gpu_action": "submit", "gpu_quota": gpu_context["gpu_quota"], "environment": "dev"}); pp(a.json()); a.raise_for_status()
 
 def gpu_jobs(args):
     token = state().get("access_token")
@@ -139,6 +152,137 @@ def audit_tail(args):
     lines = AUDIT_LOG_JSONL.read_text().splitlines()[-limit:]
     events = [json.loads(line) for line in lines if line.strip()]
     pp(events)
+
+
+def _policy_evidence(reason, decision="allow", risk_level="low", policy_id="demo.policy", policy_version="v1", decision_id=None, audit_event_id=None):
+    return {
+        "policy_id": policy_id,
+        "policy_version": policy_version,
+        "decision_id": decision_id or f"dec-{now()}",
+        "decision": decision,
+        "risk_level": risk_level,
+        "reason": reason,
+        "audit_event_id": audit_event_id or f"audit-{now()}",
+    }
+
+
+def demo_conditional_rotation(args):
+    bootstrap_device_registry_cmd(args)
+    set_device_status("linux-laptop-001", "active")
+    login(argparse.Namespace(auto=True))
+    set_attestation("linux-laptop-001", cert_thumbprint_sha256_pem(cert_to_pem_string(DEVICE_CERT_PATH)), trusted=True, ttl_seconds=300)
+    trusted = requests.post(f"{TOKEN_URL}/token/refresh", json={"refresh_token": state().get("refresh_token"), "device_cert_pem": cert_to_pem_string(DEVICE_CERT_PATH), "proof_signature": sign_proof(DEVICE_KEY_PATH, state().get("refresh_token"), "POST", "/token/refresh"), "proof_token": state().get("refresh_token")})
+    trusted.raise_for_status()
+    save_state(trusted.json())
+    set_device_status("linux-laptop-001", "disabled")
+    denied = requests.post(f"{TOKEN_URL}/token/refresh", json={"refresh_token": state().get("refresh_token"), "device_cert_pem": cert_to_pem_string(DEVICE_CERT_PATH), "proof_signature": sign_proof(DEVICE_KEY_PATH, state().get("refresh_token"), "POST", "/token/refresh"), "proof_token": state().get("refresh_token")})
+    evidence = _policy_evidence("conditional_rotation_denied", decision="deny", risk_level="high")
+    _audit("conditional_rotation_denied", **evidence)
+    pp({"trusted_refresh": token_output(trusted.json()), "denied_status": denied.status_code, "denied_body": denied.json(), "evidence": evidence})
+    set_device_status("linux-laptop-001", "active")
+
+
+def demo_refresh_replay(args):
+    set_device_status("linux-laptop-001", "active")
+    login(argparse.Namespace(auto=True))
+    set_attestation("linux-laptop-001", cert_thumbprint_sha256_pem(cert_to_pem_string(DEVICE_CERT_PATH)), trusted=True, ttl_seconds=300)
+    rt1 = state().get("refresh_token")
+    ok = requests.post(f"{TOKEN_URL}/token/refresh", json={"refresh_token": rt1, "device_cert_pem": cert_to_pem_string(DEVICE_CERT_PATH), "proof_signature": sign_proof(DEVICE_KEY_PATH, rt1, "POST", "/token/refresh"), "proof_token": rt1})
+    ok.raise_for_status()
+    rt2 = ok.json().get("refresh_token")
+    save_state(ok.json())
+    replay = requests.post(f"{TOKEN_URL}/token/refresh", json={"refresh_token": rt1, "device_cert_pem": cert_to_pem_string(DEVICE_CERT_PATH), "proof_signature": sign_proof(DEVICE_KEY_PATH, rt1, "POST", "/token/refresh"), "proof_token": rt1})
+    evidence = _policy_evidence("refresh_replay_detected", decision="deny", risk_level="high")
+    _audit("refresh_replay_detected", rt1_preview=token_preview(rt1), rt2_preview=token_preview(rt2), **evidence)
+    pp({"first_refresh": token_output(ok.json()), "replay_status": replay.status_code, "replay_body": {"error": "refresh_replay_detected", "upstream": replay.json()}, "evidence": evidence})
+
+
+def demo_device_attested_renewal(args):
+    print("SIMULATED ATTESTATION DEMO (no real TPM attestation)")
+    set_device_status("linux-laptop-001", "active")
+    login(argparse.Namespace(auto=True))
+    rt = state().get("refresh_token")
+    simulated_attestation = set_attestation("linux-laptop-001", cert_thumbprint_sha256_pem(cert_to_pem_string(DEVICE_CERT_PATH)), trusted=True, ttl_seconds=300)
+    good = requests.post(f"{TOKEN_URL}/token/refresh", json={"refresh_token": rt, "device_cert_pem": cert_to_pem_string(DEVICE_CERT_PATH), "proof_signature": sign_proof(DEVICE_KEY_PATH, rt, "POST", "/token/refresh"), "proof_token": rt})
+    good.raise_for_status()
+    save_state(good.json())
+    set_device_status("linux-laptop-001", "disabled")
+    bad_rt = state().get("refresh_token")
+    bad = requests.post(f"{TOKEN_URL}/token/refresh", json={"refresh_token": bad_rt, "device_cert_pem": cert_to_pem_string(DEVICE_CERT_PATH), "proof_signature": sign_proof(DEVICE_KEY_PATH, bad_rt, "POST", "/token/refresh"), "proof_token": bad_rt})
+    err = "device_untrusted" if bad.status_code == 403 else "device_attestation_required"
+    _audit("device_attestation_denied", **_policy_evidence(err, decision="deny", risk_level="high"))
+    pp({"simulated_attestation": simulated_attestation, "trusted_refresh": token_output(good.json()), "untrusted_status": bad.status_code, "untrusted_error": err, "upstream": bad.json()})
+    set_device_status("linux-laptop-001", "active")
+
+
+def demo_action_specific_gpu_token(args):
+    # Demo note: JWT keeps action-specific claims visible for interview walkthroughs.
+    # In opaque-token production designs, the same metadata can be server-side and enforced through introspection.
+    set_device_status("linux-laptop-001", "active")
+    set_attestation("linux-laptop-001", cert_thumbprint_sha256_pem(cert_to_pem_string(DEVICE_CERT_PATH)), trusted=True, ttl_seconds=300)
+    login(argparse.Namespace(auto=True))
+    token = state().get("access_token")
+    job_id, dataset_id = "job-001", "dataset-001"
+    evidence = _policy_evidence("gpu_exact_match_required")
+    gpu_context = {"job_id": job_id, "dataset_id": dataset_id, "gpu_action": "submit", "gpu_quota": 1, "environment": "dev", "model_id": "demo-transformer", "policy_id": evidence["policy_id"], "policy_version": evidence["policy_version"], "decision_id": evidence["decision_id"], "risk_level": evidence["risk_level"], "max_runtime_seconds": 300}
+    obo = requests.post(f"{TOKEN_URL}/obo/exchange", headers=proof_headers(token, "POST", "/obo/exchange"), json={"audience": INTERNAL_API_AUD, "scopes": ["gpu.job.submit"], "token_profile": "action_specific_gpu", "gpu_context": gpu_context})
+    obo.raise_for_status()
+    down = obo.json()["access_token"]
+    introspected = requests.post(f"{TOKEN_URL}/introspect", json={"token": down, "audience": INTERNAL_API_AUD}).json()
+    allow = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(down, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "model_id": "demo-transformer", "dataset": "synthetic-dev-data", "gpu_count": 1, "job_id": job_id, "dataset_id": dataset_id, "gpu_action": "submit", "gpu_quota": 1, "environment": "dev", "max_runtime_seconds": 300})
+    deny_job = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(down, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "model_id": "demo-transformer", "dataset": "synthetic-dev-data", "gpu_count": 1, "job_id": "job-999", "dataset_id": dataset_id, "gpu_action": "submit", "gpu_quota": 1, "environment": "dev"})
+    deny_mismatch = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(down, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "model_id": "demo-transformer", "dataset": "wrong", "gpu_count": 1, "job_id": job_id, "dataset_id": "wrong", "gpu_action": "submit", "gpu_quota": 1, "environment": "dev"})
+    deny_quota = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(down, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "model_id": "demo-transformer", "dataset": "synthetic-dev-data", "gpu_count": 2, "job_id": job_id, "dataset_id": dataset_id, "gpu_action": "submit", "gpu_quota": 1, "environment": "dev"})
+    deny_env = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(down, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "model_id": "demo-transformer", "dataset": "synthetic-dev-data", "gpu_count": 1, "job_id": job_id, "dataset_id": dataset_id, "gpu_action": "submit", "gpu_quota": 1, "environment": "prod"})
+    deny_model = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(down, "POST", "/gpu/jobs/submit"), json={"model": "wrong-model", "model_id": "wrong-model", "dataset": "synthetic-dev-data", "gpu_count": 1, "job_id": job_id, "dataset_id": dataset_id, "gpu_action": "submit", "gpu_quota": 1, "environment": "dev"})
+    generic = requests.post(f"{TOKEN_URL}/obo/exchange", headers=proof_headers(token, "POST", "/obo/exchange"), json={"audience": INTERNAL_API_AUD, "scopes": ["gpu.job.submit"]})
+    generic.raise_for_status()
+    generic_token = generic.json()["access_token"]
+    deny_missing_claims = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(generic_token, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "gpu_count": 1, "job_id": job_id, "dataset_id": dataset_id, "gpu_action": "submit", "environment": "dev"})
+    _audit("gpu_action_specific_demo", **evidence)
+    pp({"token_claims": _decode_jwt_claims_unverified(down), "introspect": introspected, "allow_status": allow.status_code, "deny_job_reason": deny_job.json(), "deny_dataset_reason": deny_mismatch.json(), "deny_quota_reason": deny_quota.json(), "deny_environment_reason": deny_env.json(), "deny_model_reason": deny_model.json(), "deny_missing_claims_reason": deny_missing_claims.json(), "evidence": evidence})
+
+
+def audit_verify(args):
+    if not AUDIT_LOG_JSONL.exists():
+        pp({"valid": True, "events": 0})
+        return
+    prev = "GENESIS"
+    first_bad = None
+    lines = AUDIT_LOG_JSONL.read_text().splitlines()
+    for idx, line in enumerate(lines, start=1):
+        evt = json.loads(line)
+        payload = f"{evt.get('audit_event_id','')}|{evt.get('timestamp')}|{evt.get('event_type') or evt.get('event')}|{evt.get('decision_id') or ''}|{prev}"
+        expected = hashlib.sha256(payload.encode()).hexdigest()
+        if evt.get("previous_hash") != prev or evt.get("event_hash") != expected:
+            first_bad = idx
+            break
+        prev = evt.get("event_hash")
+    pp({"valid": first_bad is None, "first_bad_event": first_bad})
+
+def demo_jwt_replay_kill_switch(args):
+    set_device_status("linux-laptop-001", "active")
+    login(argparse.Namespace(auto=True))
+    set_attestation("linux-laptop-001", cert_thumbprint_sha256_pem(cert_to_pem_string(DEVICE_CERT_PATH)), trusted=True, ttl_seconds=300)
+    token = state().get("access_token")
+    good = requests.post(f"{TOKEN_URL}/obo/exchange", headers=proof_headers(token, "POST", "/obo/exchange"), json={"audience": INTERNAL_API_AUD, "scopes": ["gpu.job.submit"], "gpu_context": {"job_id": "replay-job-1", "dataset_id": "replay-ds-1", "gpu_action": "submit", "gpu_quota": 1, "environment": "dev", "model_id": "demo-transformer", "max_runtime_seconds": 120, "policy_id": "gpu.replay.policy", "policy_version": "v1", "decision_id": f"dec-{now()}", "risk_level": "low"}})
+    good.raise_for_status()
+    jwt = good.json()["access_token"]
+    submit_body = {"model": "demo-transformer", "model_id": "demo-transformer", "dataset": "replay-ds-1", "dataset_id": "replay-ds-1", "gpu_count": 1, "gpu_quota": 1, "job_id": "replay-job-1", "gpu_action": "submit", "environment": "dev", "max_runtime_seconds": 120}
+    first = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(jwt, "POST", "/gpu/jobs/submit"), json=submit_body)
+    if first.status_code != 200:
+        raise RuntimeError(f"demo_jwt_replay_kill_switch first submit must succeed, got {first.status_code}: {first.text}")
+    introspect = requests.post(f"{TOKEN_URL}/introspect", json={"token": jwt, "audience": INTERNAL_API_AUD})
+    jti = introspect.json().get("jti")
+    revoke_jti(jti, "demo_jwt_replay_kill_switch")
+    second = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(jwt, "POST", "/gpu/jobs/submit"), json=submit_body)
+    if second.status_code == 200:
+        raise RuntimeError("demo_jwt_replay_kill_switch second submit unexpectedly succeeded; expected jti replay/revocation deny")
+    second_error = (second.json() or {}).get("error")
+    wrong_reasons = {"action_specific_claims_required", "job_id_mismatch", "dataset_id_mismatch", "gpu_action_mismatch", "environment_mismatch", "model_id_mismatch", "gpu_quota_exceeded", "runtime_exceeded"}
+    if second_error in wrong_reasons:
+        raise RuntimeError(f"demo_jwt_replay_kill_switch denied for wrong reason: {second_error}; expected revocation/replay/jti deny")
+    pp({"first_submit": first.status_code, "second_submit": second.status_code, "second_body": second.json(), "jti": jti})
 
 
 def _agent_gpu_submit_for_demo(agent_id):
@@ -266,6 +410,12 @@ def main():
     sub.add_parser("demo-full").set_defaults(func=demo_full); sub.add_parser("demo-enterprise").set_defaults(func=demo_enterprise)
     sub.add_parser("demo-failure-disabled-agent").set_defaults(func=demo_failure_disabled_agent)
     sub.add_parser("demo-failure-scope-denied").set_defaults(func=demo_failure_scope_denied)
+    sub.add_parser("demo-conditional-rotation").set_defaults(func=demo_conditional_rotation)
+    sub.add_parser("demo-refresh-replay").set_defaults(func=demo_refresh_replay)
+    sub.add_parser("demo-device-attested-renewal").set_defaults(func=demo_device_attested_renewal)
+    sub.add_parser("demo-action-specific-gpu-token").set_defaults(func=demo_action_specific_gpu_token)
+    sub.add_parser("audit-verify").set_defaults(func=audit_verify)
+    sub.add_parser("demo-jwt-replay-kill-switch").set_defaults(func=demo_jwt_replay_kill_switch)
     args=p.parse_args(); args.func(args)
 
 if __name__ == '__main__':
