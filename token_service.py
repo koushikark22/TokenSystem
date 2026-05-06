@@ -166,6 +166,8 @@ class Handler(BaseHTTPRequestHandler):
     def obo_exchange(self, body):
         incoming = bearer(self.headers); requested = body.get("scopes", ["build.read"]); target_aud = body.get("audience", INTERNAL_API_AUD); agent_id = body.get("agent_id")
         action_claims = body.get("action_claims", {}) if isinstance(body.get("action_claims", {}), dict) else {}
+        if not action_claims and isinstance(body.get("gpu_context", {}), dict):
+            action_claims = body.get("gpu_context", {})
         token_profile = body.get("token_profile")
         try:
             claims = decode_and_validate_jwt(incoming, TOKEN_SERVICE_AUD)

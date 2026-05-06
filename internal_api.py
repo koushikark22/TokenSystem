@@ -168,31 +168,32 @@ class Handler(BaseHTTPRequestHandler):
                 if not ok_posture:
                     return self.send_json({"error": reason}, 403)
                 actor = actor_from_claims(c)
+                evidence = {"policy_id": c.get("policy_id"), "decision_id": c.get("decision_id"), "risk_level": c.get("risk_level")}
                 if c.get("token_profile") == "action_specific_gpu":
                     required_claims = ["job_id", "dataset_id", "gpu_action", "gpu_quota", "environment", "policy_id", "policy_version", "decision_id", "risk_level"]
                     missing = [k for k in required_claims if c.get(k) is None]
                     if missing:
-                        write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "missing_action_specific_claims", "missing": missing})
-                        return self.send_json({"error": "missing_action_specific_claims", "missing": missing}, 403)
+                        write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "action_specific_claims_required", "missing": missing, **evidence})
+                        return self.send_json({"error": "action_specific_claims_required", "missing": missing}, 403)
                 if c.get("job_id") and body.get("job_id") != c.get("job_id"):
-                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "job_id_mismatch"})
+                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "job_id_mismatch", **evidence})
                     return self.send_json({"error": "job_id_mismatch"}, 403)
                 if c.get("dataset_id") and body.get("dataset_id") != c.get("dataset_id"):
-                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "dataset_id_mismatch"})
+                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "dataset_id_mismatch", **evidence})
                     return self.send_json({"error": "dataset_id_mismatch"}, 403)
                 if c.get("gpu_action") and body.get("gpu_action") != c.get("gpu_action"):
-                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "gpu_action_mismatch"})
+                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "gpu_action_mismatch", **evidence})
                     return self.send_json({"error": "gpu_action_mismatch"}, 403)
                 if c.get("environment") and body.get("environment") != c.get("environment"):
-                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "environment_mismatch"})
+                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "environment_mismatch", **evidence})
                     return self.send_json({"error": "environment_mismatch"}, 403)
                 if c.get("gpu_quota") is not None:
                     claim_quota = int(c.get("gpu_quota"))
                     if int(body.get("gpu_count", 1)) > claim_quota:
-                        write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "gpu_quota_exceeded_or_mismatch"})
+                        write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "gpu_quota_exceeded_or_mismatch", **evidence})
                         return self.send_json({"error": "gpu_quota_exceeded_or_mismatch"}, 403)
                 if c.get("model_id") and body.get("model_id") != c.get("model_id"):
-                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "model_id_mismatch"})
+                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "model_id_mismatch", **evidence})
                     return self.send_json({"error": "model_id_mismatch"}, 403)
                 for key in [f"user:{c.get('sub')}", f"device:{c.get('device_id')}", f"agent:{c.get('agent_id')}", "scope:gpu.job.submit"]:
                     ok, reason = RL.allow(key)
