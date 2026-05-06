@@ -166,6 +166,7 @@ class Handler(BaseHTTPRequestHandler):
     def obo_exchange(self, body):
         incoming = bearer(self.headers); requested = body.get("scopes", ["build.read"]); target_aud = body.get("audience", INTERNAL_API_AUD); agent_id = body.get("agent_id")
         action_claims = body.get("action_claims", {}) if isinstance(body.get("action_claims", {}), dict) else {}
+        token_profile = body.get("token_profile")
         try:
             claims = decode_and_validate_jwt(incoming, TOKEN_SERVICE_AUD)
             validate_sender_constrained_proof(claims, decode_cert_header(self.headers.get("X-Client-Cert", "")), self.headers.get("X-Proof-Signature"), incoming, "POST", "/obo/exchange")
@@ -183,9 +184,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": "scope_not_allowed", "reason": "requested scope is not allowed for this user or agent"}, 403)
             base_claims = {"obo": True, "original_client_id": claims.get("client_id"), "device_id": claims.get("device_id"), "auth_strength": claims.get("auth_strength","mfa"), "act": {"sub": f"user:{claims['sub']}"}, "obo_chain": [f"user:{claims['sub']}", f"agent:{agent_id}" if agent_id else f"user:{claims['sub']}", f"service:{target_aud}"], "target_service": target_aud, "target_action": ",".join(requested), "original_user": claims["sub"], "acting_agent": agent_id, "agent_id": agent_id, "initiating_user": claims["sub"], "delegation_type": "on_behalf_of"}
             if "gpu.job.submit" in requested:
-                for key in ["job_id", "dataset_id", "gpu_action", "gpu_quota", "environment", "policy_id", "decision_id", "risk_level", "max_runtime_seconds", "model_id"]:
+                for key in ["job_id", "dataset_id", "gpu_action", "gpu_quota", "environment", "model_id", "max_runtime_seconds", "policy_id", "policy_version", "decision_id", "risk_level"]:
                     if key in action_claims:
                         base_claims[key] = action_claims[key]
+                if token_profile == "action_specific_gpu":
+                    base_claims["token_profile"] = token_profile
             downstream = issue_jwt(subject=f"agent:{agent_id}" if agent_id else claims["sub"], audience=target_aud, client_id="central-token-service-obo", scopes=requested, actor_type="agent" if agent_id else "user", cnf_x5t=(claims.get("cnf") or {}).get("x5t#S256"), extra_claims=base_claims)
             audit("obo_token_issued", user=claims["sub"], agent_id=agent_id, scopes=requested, audience=target_aud)
             return self.send_json({"access_token": downstream, "token_type":"Bearer", "expires_in": ACCESS_TOKEN_TTL_SECONDS})

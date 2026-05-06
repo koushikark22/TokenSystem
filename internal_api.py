@@ -168,6 +168,12 @@ class Handler(BaseHTTPRequestHandler):
                 if not ok_posture:
                     return self.send_json({"error": reason}, 403)
                 actor = actor_from_claims(c)
+                if c.get("token_profile") == "action_specific_gpu":
+                    required_claims = ["job_id", "dataset_id", "gpu_action", "gpu_quota", "environment", "policy_id", "policy_version", "decision_id", "risk_level"]
+                    missing = [k for k in required_claims if c.get(k) is None]
+                    if missing:
+                        write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "missing_action_specific_claims", "missing": missing})
+                        return self.send_json({"error": "missing_action_specific_claims", "missing": missing}, 403)
                 if c.get("job_id") and body.get("job_id") != c.get("job_id"):
                     write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "job_id_mismatch"})
                     return self.send_json({"error": "job_id_mismatch"}, 403)
@@ -182,10 +188,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"error": "environment_mismatch"}, 403)
                 if c.get("gpu_quota") is not None:
                     claim_quota = int(c.get("gpu_quota"))
-                    requested_quota = int(body.get("gpu_quota", body.get("gpu_count", 1)))
-                    if requested_quota != claim_quota or int(body.get("gpu_count", 1)) > claim_quota:
+                    if int(body.get("gpu_count", 1)) > claim_quota:
                         write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "gpu_quota_exceeded_or_mismatch"})
                         return self.send_json({"error": "gpu_quota_exceeded_or_mismatch"}, 403)
+                if c.get("model_id") and body.get("model_id") != c.get("model_id"):
+                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "model_id_mismatch"})
+                    return self.send_json({"error": "model_id_mismatch"}, 403)
                 for key in [f"user:{c.get('sub')}", f"device:{c.get('device_id')}", f"agent:{c.get('agent_id')}", "scope:gpu.job.submit"]:
                     ok, reason = RL.allow(key)
                     if not ok: return self.send_json({"error": reason, "key": key}, 429)
