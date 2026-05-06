@@ -25,6 +25,7 @@ from token_utils import (
     sign_proof,
 )
 from user_registry import ensure_default_user, list_users, register_user as reg_user_local, set_user_status
+from device_attestation import set_attestation
 
 TOKEN_URL = "http://127.0.0.1:8000"
 API_URL = "http://127.0.0.1:9000"
@@ -167,7 +168,9 @@ def _policy_evidence(reason, decision="allow", risk_level="low", policy_id="demo
 
 def demo_conditional_rotation(args):
     bootstrap_device_registry_cmd(args)
+    set_device_status("linux-laptop-001", "active")
     login(argparse.Namespace(auto=True))
+    set_attestation("linux-laptop-001", cert_thumbprint_sha256_pem(cert_to_pem_string(DEVICE_CERT_PATH)), trusted=True, ttl_seconds=300)
     trusted = requests.post(f"{TOKEN_URL}/token/refresh", json={"refresh_token": state().get("refresh_token"), "device_cert_pem": cert_to_pem_string(DEVICE_CERT_PATH), "proof_signature": sign_proof(DEVICE_KEY_PATH, state().get("refresh_token"), "POST", "/token/refresh"), "proof_token": state().get("refresh_token")})
     trusted.raise_for_status()
     save_state(trusted.json())
@@ -179,7 +182,9 @@ def demo_conditional_rotation(args):
 
 
 def demo_refresh_replay(args):
+    set_device_status("linux-laptop-001", "active")
     login(argparse.Namespace(auto=True))
+    set_attestation("linux-laptop-001", cert_thumbprint_sha256_pem(cert_to_pem_string(DEVICE_CERT_PATH)), trusted=True, ttl_seconds=300)
     rt1 = state().get("refresh_token")
     ok = requests.post(f"{TOKEN_URL}/token/refresh", json={"refresh_token": rt1, "device_cert_pem": cert_to_pem_string(DEVICE_CERT_PATH), "proof_signature": sign_proof(DEVICE_KEY_PATH, rt1, "POST", "/token/refresh"), "proof_token": rt1})
     ok.raise_for_status()
@@ -193,9 +198,10 @@ def demo_refresh_replay(args):
 
 def demo_device_attested_renewal(args):
     print("SIMULATED ATTESTATION DEMO (no real TPM attestation)")
+    set_device_status("linux-laptop-001", "active")
     login(argparse.Namespace(auto=True))
     rt = state().get("refresh_token")
-    simulated_attestation = {"trusted": True, "device": "linux-laptop-001", "proof_type": "cert_thumbprint"}
+    simulated_attestation = set_attestation("linux-laptop-001", cert_thumbprint_sha256_pem(cert_to_pem_string(DEVICE_CERT_PATH)), trusted=True, ttl_seconds=300)
     good = requests.post(f"{TOKEN_URL}/token/refresh", json={"refresh_token": rt, "device_cert_pem": cert_to_pem_string(DEVICE_CERT_PATH), "proof_signature": sign_proof(DEVICE_KEY_PATH, rt, "POST", "/token/refresh"), "proof_token": rt})
     good.raise_for_status()
     save_state(good.json())
@@ -252,11 +258,12 @@ def audit_verify(args):
 
 def demo_jwt_replay_kill_switch(args):
     login(argparse.Namespace(auto=True))
+    set_attestation("linux-laptop-001", cert_thumbprint_sha256_pem(cert_to_pem_string(DEVICE_CERT_PATH)), trusted=True, ttl_seconds=300)
     token = state().get("access_token")
-    good = requests.post(f"{TOKEN_URL}/obo/exchange", headers=proof_headers(token, "POST", "/obo/exchange"), json={"audience": INTERNAL_API_AUD, "scopes": ["gpu.job.submit"]})
+    good = requests.post(f"{TOKEN_URL}/obo/exchange", headers=proof_headers(token, "POST", "/obo/exchange"), json={"audience": INTERNAL_API_AUD, "scopes": ["gpu.job.submit"], "gpu_context": {"job_id": "replay-job-1", "dataset_id": "replay-ds-1", "gpu_action": "submit", "gpu_quota": 1, "environment": "dev", "model_id": "demo-transformer", "max_runtime_seconds": 120, "policy_id": "gpu.replay.policy", "policy_version": "v1", "decision_id": f"dec-{now()}", "risk_level": "low"}})
     good.raise_for_status()
     jwt = good.json()["access_token"]
-    first = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(jwt, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "dataset": "synthetic-dev-data", "gpu_count": 1})
+    first = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(jwt, "POST", "/gpu/jobs/submit"), json={"model": "demo-transformer", "model_id": "demo-transformer", "dataset": "replay-ds-1", "dataset_id": "replay-ds-1", "gpu_count": 1, "job_id": "replay-job-1", "gpu_action": "submit", "environment": "dev"})
     first.raise_for_status()
     introspect = requests.post(f"{TOKEN_URL}/introspect", json={"token": jwt, "audience": INTERNAL_API_AUD})
     jti = introspect.json().get("jti")
