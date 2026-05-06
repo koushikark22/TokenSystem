@@ -185,13 +185,27 @@ class Handler(BaseHTTPRequestHandler):
                 audit("scope_denied", user=claims.get("sub"), agent_id=agent_id, scopes=requested, decision="deny", reason="requested scope is not allowed for this user or agent")
                 return self.send_json({"error": "scope_not_allowed", "reason": "requested scope is not allowed for this user or agent"}, 403)
             base_claims = {"obo": True, "original_client_id": claims.get("client_id"), "device_id": claims.get("device_id"), "auth_strength": claims.get("auth_strength","mfa"), "act": {"sub": f"user:{claims['sub']}"}, "obo_chain": [f"user:{claims['sub']}", f"agent:{agent_id}" if agent_id else f"user:{claims['sub']}", f"service:{target_aud}"], "target_service": target_aud, "target_action": ",".join(requested), "original_user": claims["sub"], "acting_agent": agent_id, "agent_id": agent_id, "initiating_user": claims["sub"], "delegation_type": "on_behalf_of"}
+            if "gpu_context" in body and "gpu.job.submit" not in requested:
+                return self.send_json({"error": "invalid_gpu_context", "reason": "gpu_context_requires_gpu_job_submit_scope"}, 400)
             if "gpu.job.submit" in requested:
+                required_gpu_fields = ["job_id", "dataset_id", "gpu_action", "gpu_quota", "environment"]
+                if action_claims:
+                    missing_gpu = [k for k in required_gpu_fields if action_claims.get(k) in [None, ""]]
+                    if missing_gpu:
+                        return self.send_json({"error": "invalid_gpu_context", "missing": missing_gpu}, 400)
                 for key in ["job_id", "dataset_id", "gpu_action", "gpu_quota", "environment", "model_id", "max_runtime_seconds", "policy_id", "policy_version", "decision_id", "risk_level"]:
                     if key in action_claims:
                         base_claims[key] = action_claims[key]
+                if action_claims:
+                    base_claims.setdefault("policy_id", "gpu.action.policy")
+                    base_claims.setdefault("policy_version", "2026.05")
+                    base_claims.setdefault("decision_id", f"dec-{uuid.uuid4()}")
+                    base_claims.setdefault("risk_level", "low")
+                    base_claims.setdefault("reason", "action_specific_gpu_token_issued")
                 if token_profile == "action_specific_gpu":
                     base_claims["token_profile"] = token_profile
-            downstream = issue_jwt(subject=f"agent:{agent_id}" if agent_id else claims["sub"], audience=target_aud, client_id="central-token-service-obo", scopes=requested, actor_type="agent" if agent_id else "user", cnf_x5t=(claims.get("cnf") or {}).get("x5t#S256"), extra_claims=base_claims)
+            ttl_seconds = min(ACCESS_TOKEN_TTL_SECONDS, 180) if action_claims else ACCESS_TOKEN_TTL_SECONDS
+            downstream = issue_jwt(subject=f"agent:{agent_id}" if agent_id else claims["sub"], audience=target_aud, client_id="central-token-service-obo", scopes=requested, actor_type="agent" if agent_id else "user", ttl_seconds=ttl_seconds, cnf_x5t=(claims.get("cnf") or {}).get("x5t#S256"), extra_claims=base_claims)
             audit("obo_token_issued", user=claims["sub"], agent_id=agent_id, scopes=requested, audience=target_aud)
             return self.send_json({"access_token": downstream, "token_type":"Bearer", "expires_in": ACCESS_TOKEN_TTL_SECONDS})
         except Exception as e: audit("obo_failed", reason=str(e)); return self.send_json({"error": str(e)}, 401)
