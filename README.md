@@ -162,3 +162,67 @@ For production deployment, common controls include:
 - High-availability deployment and operational failover.
 - Replay cache and/or `jti` denylist strategy.
 - Agent governance workflow for registration, approval, review, and deprovisioning.
+
+## Production Innovation Demo Flows
+
+Run these demo commands from Linux/WSL after starting token service and internal API:
+
+- `python devctl.py demo-conditional-rotation`
+- `python devctl.py demo-refresh-replay`
+- `python devctl.py demo-device-attested-renewal`
+- `python devctl.py demo-action-specific-gpu-token`
+- `python devctl.py audit-verify`
+
+Interview lines:
+- Rotation should be policy-aware, not mechanical.
+- Replay detection turns token rotation into a security sensor.
+- A trusted user on an untrusted device should not receive high-trust tokens.
+- GPU access should be exact, short-lived, and auditable.
+- Every token should explain why access was allowed.
+- Audit should be evidence, not just logs.
+
+Each flow now emits policy decision evidence where available (`policy_id`, `policy_version`, `decision_id`, `decision`, `risk_level`, `reason`, `audit_event_id`) and writes tamper-evident hash chain fields (`previous_hash`, `event_hash`) into audit events.
+
+For quick local validation:
+
+```bash
+bash scripts/validate_production_demos.sh
+```
+
+## Why JWT in this demo?
+
+JWT is intentionally the **primary demo token format** to make claims and validation logic visible during interview walkthroughs. In distributed systems, JWT also enables local validation while still supporting centralized controls.
+
+Security controls demonstrated:
+- short TTL
+- audience restriction
+- scope narrowing
+- jti denylist checks for sensitive APIs
+- refresh rotation
+- token-family replay kill switch
+- certificate/device binding
+- policy decision evidence
+- tamper-evident audit chain
+
+If NVIDIA uses opaque tokens in production, this same metadata can move server-side and be returned through introspection.
+
+Even with JWT local validation, introspection is useful for sensitive APIs, debugging, revocation checks, and compatibility with opaque-token architectures.
+
+## Production Innovation Demo Commands
+
+- `python3 devctl.py demo-conditional-rotation`
+- `python3 devctl.py demo-jwt-replay-kill-switch`
+- `python3 devctl.py demo-refresh-replay`
+- `python3 devctl.py demo-device-attested-renewal`
+- `python3 devctl.py demo-action-specific-gpu-token`
+- `python3 devctl.py audit-verify`
+
+Interview lines:
+- Rotation should be policy-aware, not mechanical.
+- JWTs are short-lived, but for high-risk APIs I also check jti revocation.
+- Replay detection turns rotation into a security sensor.
+- A trusted user on an untrusted device should not receive high-trust JWTs.
+- GPU access should be exact, short-lived, and auditable.
+- Every JWT should explain why access was allowed.
+- Audit should be evidence, not just logs.
+- The demo has unsafe local modes clearly guarded so they cannot be accidentally used in production.

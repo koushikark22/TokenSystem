@@ -14,6 +14,7 @@ from token_utils import (
     has_scopes,
     validate_sender_constrained_proof,
     write_audit_event,
+    is_jti_revoked,
 )
 
 GPU_JOBS = []
@@ -74,6 +75,9 @@ class Handler(BaseHTTPRequestHandler):
             raise PermissionError("missing bearer token")
 
         claims = decode_and_validate_jwt(token, INTERNAL_API_AUD)
+        if self.route_path() in {"/gpu/jobs/submit", "/agent/comment"} and is_jti_revoked(claims.get("jti")):
+            write_audit_event("jwt_replay_or_revoked_jti_detected", {"decision": "deny", "reason": "jti_revoked", "jti": claims.get("jti")})
+            raise PermissionError("jwt_replay_or_revoked_jti_detected")
         cert_pem = decode_cert_header(self.headers.get("X-Client-Cert", "")) if self.headers.get("X-Client-Cert") else ""
         computed_thumbprint = cert_thumbprint_sha256_pem(cert_pem) if cert_pem else None
 
@@ -164,6 +168,12 @@ class Handler(BaseHTTPRequestHandler):
                 if not ok_posture:
                     return self.send_json({"error": reason}, 403)
                 actor = actor_from_claims(c)
+                if c.get("job_id") and body.get("job_id") != c.get("job_id"):
+                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "job_id_mismatch"})
+                    return self.send_json({"error": "job_id_mismatch"}, 403)
+                if c.get("dataset_id") and body.get("dataset_id") != c.get("dataset_id"):
+                    write_audit_event("gpu_submit_denied", {"decision": "deny", "reason": "dataset_id_mismatch"})
+                    return self.send_json({"error": "dataset_id_mismatch"}, 403)
                 for key in [f"user:{c.get('sub')}", f"device:{c.get('device_id')}", f"agent:{c.get('agent_id')}", "scope:gpu.job.submit"]:
                     ok, reason = RL.allow(key)
                     if not ok: return self.send_json({"error": reason, "key": key}, 429)

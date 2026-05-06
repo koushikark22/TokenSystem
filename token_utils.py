@@ -18,6 +18,7 @@ PKI_DIR = ROOT / "pki"
 STATE_DIR = ROOT / ".state"
 STATE_DIR.mkdir(exist_ok=True)
 AUDIT_LOG_PATH = STATE_DIR / "audit_log.jsonl"
+JTI_DENYLIST_PATH = STATE_DIR / "jti_denylist.json"
 
 REGION = os.getenv("REGION", "local")
 ISSUER_ID = os.getenv("ISSUER_ID", "issuer-local-01")
@@ -188,17 +189,48 @@ def json_load(path: Path, default: Any):
 def json_save(path: Path, data: Any): path.write_text(json.dumps(data, indent=2, sort_keys=True))
 
 
+def revoke_jti(jti: str, reason: str = "revoked"):
+    data = json_load(JTI_DENYLIST_PATH, {})
+    data[jti] = {"revoked_at": now(), "reason": reason}
+    json_save(JTI_DENYLIST_PATH, data)
+
+
+def is_jti_revoked(jti: str | None) -> bool:
+    if not jti:
+        return False
+    return jti in json_load(JTI_DENYLIST_PATH, {})
+
+
 def write_audit_event(event_type: str, details: Dict[str, Any] | None = None):
     details = details or {}
+    timestamp = now()
+    previous_hash = "GENESIS"
+    if AUDIT_LOG_PATH.exists():
+        lines = [ln for ln in AUDIT_LOG_PATH.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        if lines:
+            previous_hash = json.loads(lines[-1]).get("event_hash", "GENESIS")
+    audit_event_id = details.get("audit_event_id") or str(uuid.uuid4())
+    event_type_name = details.get("event_type") or event_type
+    decision_id = details.get("decision_id")
+    payload = f"{audit_event_id}|{timestamp}|{event_type_name}|{decision_id or ''}|{previous_hash}"
+    event_hash = hashlib.sha256(payload.encode()).hexdigest()
     event = {
-        "timestamp": now(),
+        "audit_event_id": audit_event_id,
+        "timestamp": timestamp,
+        "event_type": event_type_name,
         "event": event_type,
+        "previous_hash": previous_hash,
+        "event_hash": event_hash,
         "actor": details.get("actor") or details.get("user") or details.get("sub"),
         "user": details.get("user"),
         "agent_id": details.get("agent_id"),
         "token_id": details.get("token_id") or details.get("jti"),
         "scopes": details.get("scopes") or details.get("scope"),
+        "policy_id": details.get("policy_id"),
+        "policy_version": details.get("policy_version"),
+        "decision_id": decision_id,
         "decision": details.get("decision"),
+        "risk_level": details.get("risk_level"),
         "reason": details.get("reason"),
         "request_id": details.get("request_id") or details.get("correlation_id"),
         "details": details,
