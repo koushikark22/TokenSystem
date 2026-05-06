@@ -268,7 +268,7 @@ def demo_jwt_replay_kill_switch(args):
     good = requests.post(f"{TOKEN_URL}/obo/exchange", headers=proof_headers(token, "POST", "/obo/exchange"), json={"audience": INTERNAL_API_AUD, "scopes": ["gpu.job.submit"], "gpu_context": {"job_id": "replay-job-1", "dataset_id": "replay-ds-1", "gpu_action": "submit", "gpu_quota": 1, "environment": "dev", "model_id": "demo-transformer", "max_runtime_seconds": 120, "policy_id": "gpu.replay.policy", "policy_version": "v1", "decision_id": f"dec-{now()}", "risk_level": "low"}})
     good.raise_for_status()
     jwt = good.json()["access_token"]
-    submit_body = {"model": "demo-transformer", "model_id": "demo-transformer", "dataset": "replay-ds-1", "dataset_id": "replay-ds-1", "gpu_count": 1, "job_id": "replay-job-1", "gpu_action": "submit", "environment": "dev"}
+    submit_body = {"model": "demo-transformer", "model_id": "demo-transformer", "dataset": "replay-ds-1", "dataset_id": "replay-ds-1", "gpu_count": 1, "gpu_quota": 1, "job_id": "replay-job-1", "gpu_action": "submit", "environment": "dev", "max_runtime_seconds": 120}
     first = requests.post(f"{API_URL}/gpu/jobs/submit", headers=proof_headers(jwt, "POST", "/gpu/jobs/submit"), json=submit_body)
     if first.status_code != 200:
         raise RuntimeError(f"demo_jwt_replay_kill_switch first submit must succeed, got {first.status_code}: {first.text}")
@@ -279,7 +279,7 @@ def demo_jwt_replay_kill_switch(args):
     if second.status_code == 200:
         raise RuntimeError("demo_jwt_replay_kill_switch second submit unexpectedly succeeded; expected jti replay/revocation deny")
     second_error = (second.json() or {}).get("error")
-    wrong_reasons = {"action_specific_claims_required", "job_id_mismatch", "dataset_id_mismatch", "environment_mismatch", "model_id_mismatch", "gpu_quota_exceeded"}
+    wrong_reasons = {"action_specific_claims_required", "job_id_mismatch", "dataset_id_mismatch", "gpu_action_mismatch", "environment_mismatch", "model_id_mismatch", "gpu_quota_exceeded", "runtime_exceeded"}
     if second_error in wrong_reasons:
         raise RuntimeError(f"demo_jwt_replay_kill_switch denied for wrong reason: {second_error}; expected revocation/replay/jti deny")
     pp({"first_submit": first.status_code, "second_submit": second.status_code, "second_body": second.json(), "jti": jti})
