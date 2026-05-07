@@ -97,7 +97,7 @@ class Handler(BaseHTTPRequestHandler):
         device_code = secrets.token_urlsafe(32); user_code = secrets.token_hex(4).upper(); codes = db(DEVICE_CODE_DB, {})
         codes[device_code] = {"client_id": client_id, "scopes": scopes, "user_code": user_code, "authorized": False, "user": user_id, "created": now()}
         save(DEVICE_CODE_DB, codes); audit("device_code_started", client_id=client_id, scopes=scopes)
-        return self.send_json({"device_code": device_code, "user_code": user_code, "verification_uri": f"{ISSUER}/device/complete", "message": f"Open {ISSUER}/device/complete and enter code {user_code}."})
+        return self.send_json({"device_code": device_code, "user_code": user_code, "verification_uri": f"{ISSUER}/device/complete", "message": f"Device code: {user_code}"})
     def device_complete(self, body):
         from token_utils import verify_proof
         from device_registry import check_device_posture
