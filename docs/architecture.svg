@@ -1,0 +1,85 @@
+<svg width="1600" height="980" viewBox="0 0 1600 980" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Centralized Token Service Demo Architecture and Flow</title>
+  <desc id="desc">Architecture diagram for TokenSystem showing clients, token service, protected API, GPU jobs, policy checks, device trust, and audit state.</desc>
+  <defs>
+    <marker id="arrowBlue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth"><path d="M2,2 L10,6 L2,10 Z" fill="#2563eb"/></marker>
+    <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth"><path d="M2,2 L10,6 L2,10 Z" fill="#15803d"/></marker>
+    <marker id="arrowGray" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth"><path d="M2,2 L10,6 L2,10 Z" fill="#6b7280"/></marker>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0f172a" flood-opacity="0.10"/></filter>
+    <style>
+      .bg{fill:#ffffff}.title{font:700 44px Arial,Helvetica,sans-serif;fill:#0f172a}.subtitle{font:400 24px Arial,Helvetica,sans-serif;fill:#475569}.section{fill:#f8fbff;stroke:#1d4ed8;stroke-width:2.2;rx:14;filter:url(#shadow)}.section-green{fill:#f2fff6;stroke:#15803d;stroke-width:2.2;rx:14;filter:url(#shadow)}.module{fill:#ffffff;stroke:#93c5fd;stroke-width:1.7;rx:10}.support{fill:#f8fafc;stroke:#9ca3af;stroke-width:1.8;rx:10;filter:url(#shadow)}.gpu{fill:#fbf7ff;stroke:#7e22ce;stroke-width:2;rx:12;filter:url(#shadow)}.h{font:700 18px Arial,Helvetica,sans-serif;fill:#1d4ed8}.hg{font:700 19px Arial,Helvetica,sans-serif;fill:#15803d}.hp{font:700 18px Arial,Helvetica,sans-serif;fill:#6b21a8}.label{font:600 15px Arial,Helvetica,sans-serif;fill:#111827}.small{font:400 13px Arial,Helvetica,sans-serif;fill:#334155}.tiny{font:400 12px Arial,Helvetica,sans-serif;fill:#334155}.num{fill:#1d4ed8}.numText{font:700 14px Arial,Helvetica,sans-serif;fill:#ffffff}.arrowB{stroke:#2563eb;stroke-width:3;fill:none;marker-end:url(#arrowBlue)}.arrowG{stroke:#15803d;stroke-width:3;fill:none;marker-end:url(#arrowGreen)}.arrowGray{stroke:#6b7280;stroke-width:2.4;stroke-dasharray:8 7;fill:none;marker-end:url(#arrowGray)}.iconBlue{stroke:#1d4ed8;stroke-width:3;fill:none;stroke-linecap:round;stroke-linejoin:round}.iconGreen{stroke:#15803d;stroke-width:3;fill:none;stroke-linecap:round;stroke-linejoin:round}.iconPurple{stroke:#7e22ce;stroke-width:3;fill:none;stroke-linecap:round;stroke-linejoin:round}
+    </style>
+  </defs>
+  <rect class="bg" width="1600" height="980"/>
+  <text x="800" y="54" text-anchor="middle" class="title">Centralized Token Service Demo — Architecture &amp; Flow</text>
+  <text x="800" y="91" text-anchor="middle" class="subtitle">Repository architecture for TokenSystem</text>
+
+  <rect x="35" y="130" width="225" height="640" class="section"/>
+  <circle cx="67" cy="163" r="14" class="num"/><text x="67" y="168" text-anchor="middle" class="numText">1</text><text x="92" y="169" class="h">Clients &amp; Actors</text>
+  <g transform="translate(52,205)"><rect width="190" height="78" class="module"/><circle cx="39" cy="28" r="13" class="iconBlue"/><path d="M17 66c4-18 40-18 44 0" class="iconBlue"/><text x="85" y="37" class="label">User /</text><text x="85" y="58" class="label">Developer</text></g>
+  <g transform="translate(52,310)"><rect width="190" height="78" class="module"/><rect x="19" y="20" width="46" height="35" class="iconBlue"/><path d="M19 31h46M42 20c-9 10-9 25 0 35M42 20c9 10 9 25 0 35" class="iconBlue"/><text x="85" y="37" class="label">Browser</text><text x="85" y="58" class="label">Login</text></g>
+  <g transform="translate(52,430)"><rect width="190" height="78" class="module"/><rect x="18" y="22" width="50" height="36" class="iconBlue"/><path d="M30 33l12 9-12 9M47 53h14" class="iconBlue"/><text x="85" y="37" class="label">devctl.py</text><text x="85" y="58" class="label">CLI</text></g>
+  <g transform="translate(52,545)"><rect width="190" height="78" class="module"/><rect x="25" y="25" width="42" height="34" rx="10" class="iconBlue"/><circle cx="39" cy="42" r="2.5" fill="#1d4ed8"/><circle cx="54" cy="42" r="2.5" fill="#1d4ed8"/><path d="M46 25v-14M37 58h18" class="iconBlue"/><text x="85" y="37" class="label">Agent /</text><text x="85" y="58" class="label">NHI</text></g>
+  <g transform="translate(52,660)"><rect width="190" height="78" class="module"/><rect x="18" y="20" width="50" height="42" class="iconBlue"/><path d="M30 55V42M43 55V32M56 55V47" class="iconBlue"/><text x="85" y="37" class="label">Streamlit</text><text x="85" y="58" class="label">Dashboard</text></g>
+
+  <rect x="425" y="128" width="380" height="635" class="section"/>
+  <circle cx="460" cy="160" r="14" class="num"/><text x="460" y="165" text-anchor="middle" class="numText">2</text><text x="488" y="166" class="h">Token Service (token_service.py)</text>
+  <g class="label">
+    <rect x="445" y="188" width="335" height="52" class="module"/><text x="500" y="219">Login simulation / device completion</text>
+    <rect x="445" y="252" width="335" height="52" class="module"/><text x="500" y="283">JWT issuance (RS256)</text>
+    <rect x="445" y="316" width="335" height="52" class="module"/><text x="500" y="347">Refresh token rotation + reuse detection</text>
+    <rect x="445" y="380" width="335" height="52" class="module"/><text x="500" y="411">OBO token exchange + scope downscoping</text>
+    <rect x="445" y="444" width="335" height="52" class="module"/><text x="500" y="475">Step-up token flow</text>
+    <rect x="445" y="508" width="335" height="60" class="module"/><text x="500" y="532">Agent lifecycle: register / enable /</text><text x="500" y="553">disable / rotate-cert / token</text>
+    <rect x="445" y="580" width="335" height="52" class="module"/><text x="500" y="611">Introspect / revoke</text>
+    <rect x="445" y="644" width="335" height="52" class="module"/><text x="500" y="675">JWKS + OIDC discovery</text>
+    <rect x="445" y="708" width="335" height="52" class="module"/><text x="500" y="739">Conditional + device-attested checks</text>
+  </g>
+
+  <g transform="translate(870,190)"><rect width="215" height="95" class="support"/><text x="72" y="32" class="label">token_utils.py</text><text x="72" y="54" class="small">JWT signing, verification,</text><text x="72" y="73" class="small">proof validation, JTI denylist</text><path d="M25 50h26M38 37v26M28 40l20 20M48 40l-20 20" class="iconBlue"/></g>
+  <g transform="translate(870,325)"><rect width="215" height="105" class="support"/><text x="72" y="31" class="label">policy_engine.py</text><text x="72" y="51" class="label">+ policies.yaml</text><text x="72" y="72" class="small">Policy decisions, scope</text><text x="72" y="91" class="small">rules, GPU governance</text><path d="M31 32h34M48 32v55M31 87h34M26 58h18M52 58h18" class="iconBlue"/></g>
+  <g transform="translate(870,475)"><rect width="215" height="95" class="support"/><text x="72" y="31" class="label">device_registry.py</text><text x="72" y="55" class="small">Linux device registry,</text><text x="72" y="74" class="small">posture, cert thumbprints</text><ellipse cx="42" cy="34" rx="22" ry="9" class="iconBlue"/><path d="M20 34v40c0 5 10 9 22 9s22-4 22-9V34" class="iconBlue"/></g>
+  <g transform="translate(870,610)"><rect width="215" height="95" class="support"/><text x="72" y="31" class="label">device_attestation.py</text><text x="72" y="55" class="small">Simulated device</text><text x="72" y="74" class="small">attestation evidence</text><path d="M42 22l25 10v20c0 17-12 30-25 36-13-6-25-19-25-36V32z" class="iconBlue"/><circle cx="42" cy="48" r="8" class="iconBlue"/></g>
+  <g transform="translate(495,800)"><rect width="225" height="64" class="support"/><text x="82" y="29" class="label">PKI / Certificates</text><text x="82" y="49" class="small">pki_bootstrap.py</text><circle cx="43" cy="33" r="12" class="iconBlue"/><path d="M52 42l22 22M65 55l-7 7M72 62l-7 7" class="iconBlue"/></g>
+
+  <rect x="1180" y="128" width="255" height="635" class="section"/>
+  <circle cx="1215" cy="160" r="14" class="num"/><text x="1215" y="165" text-anchor="middle" class="numText">3</text><text x="1242" y="154" class="h">Protected Resource API</text><text x="1242" y="177" class="h">(internal_api.py)</text>
+  <g class="label">
+    <rect x="1198" y="220" width="220" height="65" class="module"/><text x="1265" y="258">JWT validation</text>
+    <rect x="1198" y="310" width="220" height="65" class="module"/><text x="1265" y="337">Sender-constrained</text><text x="1265" y="358">proof validation</text>
+    <rect x="1198" y="400" width="220" height="65" class="module"/><text x="1265" y="427">GPU job submit</text><text x="1265" y="448">authorization</text>
+    <rect x="1198" y="490" width="220" height="65" class="module"/><text x="1265" y="517">Action-specific claim</text><text x="1265" y="538">checks</text>
+    <rect x="1198" y="580" width="220" height="75" class="module"/><text x="1265" y="606">Quota / runtime /</text><text x="1265" y="627">dataset / environment</text><text x="1265" y="648">enforcement</text>
+    <rect x="1198" y="680" width="220" height="65" class="module"/><text x="1265" y="707">Sensitive API JTI</text><text x="1265" y="728">replay checks</text>
+  </g>
+
+  <rect x="1510" y="350" width="82" height="165" class="gpu"/>
+  <text x="1551" y="380" text-anchor="middle" class="hp">GPU Jobs /</text><text x="1551" y="402" text-anchor="middle" class="hp">Protected</text><text x="1551" y="424" text-anchor="middle" class="hp">Actions</text>
+  <rect x="1532" y="455" width="40" height="40" class="iconPurple"/><circle cx="1544" cy="467" r="2" fill="#7e22ce"/><circle cx="1554" cy="467" r="2" fill="#7e22ce"/><circle cx="1564" cy="467" r="2" fill="#7e22ce"/><circle cx="1544" cy="481" r="2" fill="#7e22ce"/><circle cx="1554" cy="481" r="2" fill="#7e22ce"/><circle cx="1564" cy="481" r="2" fill="#7e22ce"/>
+
+  <rect x="300" y="842" width="1025" height="112" class="section-green"/>
+  <circle cx="705" cy="872" r="14" fill="#15803d"/><text x="705" y="877" text-anchor="middle" class="numText">5</text><text x="730" y="878" class="hg">Audit &amp; State</text>
+  <g transform="translate(330,895)"><rect width="250" height="50" class="module" style="stroke:#15803d"/><text x="70" y="22" class="label">.state/audit.json</text><text x="70" y="41" class="tiny">Structured audit snapshot</text><path d="M28 10h27l14 14v22H28zM55 10v14h14" class="iconGreen"/></g>
+  <g transform="translate(635,895)"><rect width="270" height="50" class="module" style="stroke:#15803d"/><text x="70" y="22" class="label">.state/audit_log.jsonl</text><text x="70" y="41" class="tiny">Append-only hash chain</text><path d="M27 33c11 11 21-19 34-6M51 17c11-11 21 19 34 6" class="iconGreen"/></g>
+  <g transform="translate(965,895)"><rect width="285" height="50" class="module" style="stroke:#15803d"/><text x="70" y="22" class="label">Device / Agent / User state</text><text x="70" y="41" class="tiny">Persistent local demo state</text><circle cx="34" cy="25" r="12" class="iconGreen"/><path d="M52 40c4-18 36-18 40 0" class="iconGreen"/></g>
+
+  <path d="M260 245 H425" class="arrowB"/><circle cx="295" cy="238" r="13" class="num"/><text x="295" y="243" text-anchor="middle" class="numText">1</text><text x="320" y="230" class="tiny">User login +</text><text x="320" y="247" class="tiny">device proof</text>
+  <path d="M425 320 H260" class="arrowB"/><circle cx="315" cy="315" r="13" class="num"/><text x="315" y="320" text-anchor="middle" class="numText">2</text><text x="340" y="307" class="tiny">Issue access +</text><text x="340" y="324" class="tiny">refresh token</text>
+  <path d="M260 472 H425" class="arrowB"/><circle cx="295" cy="465" r="13" class="num"/><text x="295" y="470" text-anchor="middle" class="numText">3</text><text x="320" y="458" class="tiny">Refresh / conditional</text><text x="320" y="475" class="tiny">rotation</text>
+  <path d="M260 590 H425" class="arrowB"/><circle cx="295" cy="583" r="13" class="num"/><text x="295" y="588" text-anchor="middle" class="numText">4</text><text x="320" y="574" class="tiny">OBO exchange for narrowed</text><text x="320" y="591" class="tiny">downstream token</text>
+  <path d="M260 702 H425" class="arrowB"/><text x="320" y="695" class="tiny">Optional agent</text><text x="320" y="712" class="tiny">token issuance</text>
+  <path d="M805 445 H1180" class="arrowB"/><circle cx="1124" cy="433" r="13" class="num"/><text x="1124" y="438" text-anchor="middle" class="numText">6</text><text x="1085" y="465" class="tiny">Call protected API</text><text x="1085" y="482" class="tiny">with token + proof</text>
+  <path d="M1435 435 H1510" class="arrowB"/><circle cx="1466" cy="423" r="13" class="num"/><text x="1466" y="428" text-anchor="middle" class="numText">8</text><text x="1450" y="462" class="tiny">GPU action</text><text x="1450" y="479" class="tiny">enforcement</text>
+  <path d="M805 240 H870" class="arrowGray"/><path d="M805 378 H870" class="arrowGray"/><path d="M805 528 H870" class="arrowGray"/><path d="M805 657 H870" class="arrowGray"/><path d="M1085 378 H1180" class="arrowGray"/><path d="M1085 528 H1180" class="arrowGray"/><path d="M1085 657 H1180" class="arrowGray"/><circle cx="1138" cy="612" r="13" class="num"/><text x="1138" y="617" text-anchor="middle" class="numText">7</text><text x="1085" y="642" class="tiny">Policy + device +</text><text x="1085" y="659" class="tiny">attestation checks</text>
+  <path d="M615 800 V763" class="arrowGray"/>
+  <path d="M700 763 V842" class="arrowG"/><circle cx="735" cy="824" r="13" fill="#15803d"/><text x="735" y="829" text-anchor="middle" class="numText">9</text><text x="760" y="816" class="tiny">Write audit events</text><text x="760" y="833" class="tiny">+ verify chain</text>
+  <path d="M1310 763 V842" class="arrowG"/><circle cx="1355" cy="824" r="13" fill="#15803d"/><text x="1355" y="829" text-anchor="middle" class="numText">9</text><text x="1380" y="816" class="tiny">Write audit events</text><text x="1380" y="833" class="tiny">+ verify chain</text>
+  <path d="M148 738 V890 H300" class="arrowG" stroke-dasharray="8 7"/><text x="165" y="852" class="tiny" fill="#15803d">Reads audit</text><text x="165" y="869" class="tiny" fill="#15803d">&amp; state data</text>
+  <path d="M580 920 H635" class="arrowG"/><path d="M905 920 H965" class="arrowG"/>
+
+  <rect x="1380" y="835" width="190" height="115" rx="12" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="1475" y="858" text-anchor="middle" class="label">Legend</text>
+  <path d="M1400 880 H1450" class="arrowB"/><text x="1460" y="876" class="tiny">request / token flow</text>
+  <path d="M1400 910 H1450" class="arrowGray"/><text x="1460" y="906" class="tiny">policy / state lookup</text>
+  <path d="M1400 940 H1450" class="arrowG"/><text x="1460" y="936" class="tiny">audit / logging</text>
+</svg>
