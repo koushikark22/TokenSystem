@@ -285,3 +285,4 @@ Security controls demonstrated:
 The same metadata can also be stored server-side and exposed through introspection when using opaque tokens.
 
 Even with local JWT validation, introspection is useful for sensitive APIs, debugging, revocation checks, and compatibility with opaque-token architectures.
+
