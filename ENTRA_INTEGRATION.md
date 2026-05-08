@@ -94,19 +94,6 @@ The token service does not trust the `agent_id` string alone. It validates:
 - Requested scopes are allowed
 - Quota is within policy
 
-## Why Use a Custom Token Service With Entra?
-
-Entra is the enterprise identity provider. The custom token service adds internal platform enforcement closer to protected workloads:
-
-- GPU job authorization
-- Agent-specific identity governance
-- Certificate-bound proof-of-possession for Linux workflows
-- Internal OBO token shaping
-- Fine-grained internal scopes
-- Local audit correlation across user, device, agent, and GPU actions
-
-In short: Entra proves who the user is. The custom token service decides what the user, device, or agent is allowed to do inside the platform.
-
 ## Production Hardening
 
 Production deployment would replace local demo primitives with:
