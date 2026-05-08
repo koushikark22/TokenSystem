@@ -2,6 +2,28 @@
 
 This repository is a technical proof-of-concept for centralized token issuance and authorization across internal APIs, GPU-oriented actions, Linux device trust, and automated agent identities.
 
+## Project ownership
+
+This proof-of-concept was designed and implemented by **Koushik Anand** as a hands-on security architecture and engineering demo for a centralized token service.
+
+The goal of the project is to demonstrate practical understanding of:
+
+- short-lived token issuance
+- refresh-token rotation and reuse detection
+- OBO token exchange and least-privilege downscoping
+- sender-constrained proof validation
+- Linux device trust and device-attested renewal checks
+- agent / non-human identity lifecycle governance
+- action-specific authorization for protected GPU operations
+- revocation, introspection, and replay controls
+- tamper-evident audit logging
+
+All demo flows are intentionally runnable locally so the architecture, controls, and tradeoffs can be inspected and explained end to end.
+
+## Architecture
+
+![Centralized Token Service Architecture](docs/architecture.svg)
+
 ## Current capabilities
 
 - Short-lived RS256 JWT access tokens.
