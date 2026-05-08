@@ -20,10 +20,6 @@ The goal of the project is to demonstrate practical understanding of:
 
 All demo flows are intentionally runnable locally so the architecture, controls, and tradeoffs can be inspected and explained end to end.
 
-## Architecture
-
-![Centralized Token Service Architecture](docs/architecture.svg)
-
 ## Current capabilities
 
 - Short-lived RS256 JWT access tokens.
