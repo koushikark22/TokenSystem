@@ -253,7 +253,7 @@ class Handler(BaseHTTPRequestHandler):
         agent_mode = body.get("agent_mode")
         initiating_user = body.get("initiating_user")
         requested_tools = body.get("requested_tools", [])
-        environment = body.get("environment", agent.get("environment"))
+        environment = agent.get("environment", "dev")
         if not requested_tools:
             audit("agent_task_denied", decision="deny", agent_id=agent_id, user=initiating_user, reason="requested_tools_required")
             return self.send_json({"error": "requested_tools_required"}, 400)
@@ -336,18 +336,31 @@ class Handler(BaseHTTPRequestHandler):
     def agent_task_approve(self, body):
         from agent_tasks import load_tasks, save_tasks
         task_id = body.get("task_id")
+        approved_by = body.get("approved_by")
         if not task_id:
             return self.send_json({"error": "task_id_required"}, 400)
+        if not approved_by:
+            return self.send_json({"error": "approved_by_required"}, 400)
         tasks = load_tasks()
         task = tasks.get(task_id)
         if not task:
             return self.send_json({"error": "task_not_found"}, 404)
+        if task.get("approval_required") and approved_by == task.get("initiating_user"):
+            audit(
+                "agent_task_approval_denied",
+                task_id=task_id,
+                agent_id=task.get("agent_id"),
+                user=approved_by,
+                decision="deny",
+                reason="self_approval_not_allowed",
+            )
+            return self.send_json({"error": "self_approval_not_allowed"}, 403)
         task["approval_status"] = "approved"
         task["status"] = "approved"
         task["approved_at"] = now()
         tasks[task_id] = task
         save_tasks(tasks)
-        audit("agent_task_approved", task_id=task_id, agent_id=task.get("agent_id"), user=task.get("initiating_user"))
+        audit("agent_task_approved", task_id=task_id, agent_id=task.get("agent_id"), user=approved_by)
         return self.send_json(task, 200)
     def agent_task_token(self, body):
         from token_utils import verify_proof
