@@ -380,6 +380,98 @@ def demo_failure_scope_denied(args):
         return
     pp({"error": "unexpected_success", "response": r.json()})
 
+
+def demo_agentic_task(args):
+    agent_id = "agent-gpu-planner-dev"
+    register_agent_payload = {
+        "agent_id": agent_id,
+        "agent_owner": "platform-security",
+        "environment": "dev",
+        "allowed_scopes": ["gpu.job.submit", "gpu.job.read", "pr.comment"],
+        "gpu_quota_max_jobs": 1,
+    }
+    requests.post(f"{TOKEN_URL}/agent/register", json=register_agent_payload).raise_for_status()
+
+    created_task_rsp = requests.post(
+        f"{TOKEN_URL}/agent/task/create",
+        json={
+            "agent_id": agent_id,
+            "initiating_user": "developer01",
+            "agent_mode": "manual",
+            "requested_tools": ["gpu.submit.dev"],
+            "gpu_quota": 1,
+            "goal": "submit a controlled development GPU job",
+        },
+    )
+    created_task_rsp.raise_for_status()
+    created_task = created_task_rsp.json()
+    task_id = created_task.get("task_id")
+
+    pre_approval_token_rsp = requests.post(
+        f"{TOKEN_URL}/agent/task/token",
+        json={"task_id": task_id, "proof_token": "agent-task-token-proof"},
+        headers={
+            "X-Client-Cert": encode_cert_header(cert_to_pem_string(AGENT_CERT_PATH)),
+            "X-Proof-Signature": sign_proof(AGENT_KEY_PATH, "agent-task-token-proof", "POST", "/agent/task/token"),
+        },
+    )
+
+    self_approval_rsp = requests.post(
+        f"{TOKEN_URL}/agent/task/approve",
+        json={"task_id": task_id, "approved_by": "developer01"},
+    )
+
+    approval_rsp = requests.post(
+        f"{TOKEN_URL}/agent/task/approve",
+        json={"task_id": task_id, "approved_by": "platform-security"},
+    )
+    approval_rsp.raise_for_status()
+    approved_task = approval_rsp.json()
+
+    task_token_rsp = requests.post(
+        f"{TOKEN_URL}/agent/task/token",
+        json={"task_id": task_id, "proof_token": "agent-task-token-proof"},
+        headers={
+            "X-Client-Cert": encode_cert_header(cert_to_pem_string(AGENT_CERT_PATH)),
+            "X-Proof-Signature": sign_proof(AGENT_KEY_PATH, "agent-task-token-proof", "POST", "/agent/task/token"),
+        },
+    )
+    task_token_rsp.raise_for_status()
+    task_token = task_token_rsp.json()
+
+    introspect_rsp = requests.post(
+        f"{TOKEN_URL}/introspect",
+        json={"token": task_token.get("access_token"), "audience": INTERNAL_API_AUD},
+    )
+    introspect_rsp.raise_for_status()
+    introspect = introspect_rsp.json()
+
+    summary = {
+        "created_task": created_task,
+        "pre_approval_token_status": pre_approval_token_rsp.status_code,
+        "pre_approval_token_body": pre_approval_token_rsp.json(),
+        "self_approval_status": self_approval_rsp.status_code,
+        "self_approval_body": self_approval_rsp.json(),
+        "approval_status": approval_rsp.status_code,
+        "approved_task": approved_task,
+        "task_token": token_output(task_token),
+        "introspect": {
+            "active": introspect.get("active"),
+            "sub": introspect.get("sub"),
+            "actor_type": introspect.get("actor_type"),
+            "agent_id": introspect.get("agent_id"),
+            "initiating_user": introspect.get("initiating_user"),
+            "delegation_type": introspect.get("delegation_type"),
+            "task_id": introspect.get("task_id"),
+            "allowed_tools": introspect.get("allowed_tools"),
+            "environment": introspect.get("environment"),
+            "gpu_quota": introspect.get("gpu_quota"),
+            "approval_status": introspect.get("approval_status"),
+            "scope": introspect.get("scope"),
+        },
+    }
+    pp(summary)
+
 def main():
     p=argparse.ArgumentParser(); sub=p.add_subparsers(dest="cmd", required=True)
     s=sub.add_parser("login"); s.add_argument("--auto", action="store_true"); s.set_defaults(func=login)
@@ -416,6 +508,7 @@ def main():
     sub.add_parser("demo-action-specific-gpu-token").set_defaults(func=demo_action_specific_gpu_token)
     sub.add_parser("audit-verify").set_defaults(func=audit_verify)
     sub.add_parser("demo-jwt-replay-kill-switch").set_defaults(func=demo_jwt_replay_kill_switch)
+    sub.add_parser("demo-agentic-task").set_defaults(func=demo_agentic_task)
     args=p.parse_args(); args.func(args)
 
 if __name__ == '__main__':
