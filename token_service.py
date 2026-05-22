@@ -85,6 +85,8 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/agent/enable": return self.agent_disable(body, "active")
             if p == "/agent/token": return self.agent_token(body)
             if p == "/agent/task/create": return self.agent_task_create(body)
+            if p == "/agent/task/approve": return self.agent_task_approve(body)
+            if p == "/agent/task/token": return self.agent_task_token(body)
             if p == "/agent/rotate-cert": return self.agent_rotate_cert(body)
             if p == "/introspect": return self.introspect(body)
             if p == "/revoke": return self.revoke(body)
@@ -310,6 +312,52 @@ class Handler(BaseHTTPRequestHandler):
         persist_task(task)
         audit("agent_task_created", agent_id=agent_id, user=initiating_user, agent_mode=agent_mode, requested_scopes=requested_scopes, requested_tools=requested_tools, environment=environment, gpu_quota=gpu_quota)
         return self.send_json(task, 201)
+    def agent_task_approve(self, body):
+        from agent_tasks import load_tasks, save_tasks
+        task_id = body.get("task_id")
+        if not task_id:
+            return self.send_json({"error": "task_id_required"}, 400)
+        tasks = load_tasks()
+        task = tasks.get(task_id)
+        if not task:
+            return self.send_json({"error": "task_not_found"}, 404)
+        task["approval_status"] = "approved"
+        task["status"] = "approved"
+        task["approved_at"] = now()
+        tasks[task_id] = task
+        save_tasks(tasks)
+        audit("agent_task_approved", task_id=task_id, agent_id=task.get("agent_id"), user=task.get("initiating_user"))
+        return self.send_json(task, 200)
+    def agent_task_token(self, body):
+        from token_utils import verify_proof
+        from agent_tasks import load_tasks
+        task_id = body.get("task_id")
+        if not task_id:
+            return self.send_json({"error": "task_id_required"}, 400)
+        tasks = load_tasks()
+        task = tasks.get(task_id)
+        if not task:
+            return self.send_json({"error": "task_not_found"}, 404)
+        agent_id = task.get("agent_id")
+        agent = db(AGENT_DB, {}).get(agent_id)
+        if not agent:
+            return self.send_json({"error": "agent_not_found"}, 404)
+        if agent.get("status") != "active":
+            return self.send_json({"error": "agent_not_active"}, 403)
+        if task.get("approval_required", True) and task.get("approval_status") != "approved":
+            return self.send_json({"error": "approval_required"}, 403)
+        cert_pem = decode_cert_header(self.headers.get("X-Client-Cert", ""))
+        proof_sig = self.headers.get("X-Proof-Signature")
+        if not cert_pem or not proof_sig:
+            return self.send_json({"error": "client_certificate_and_proof_required"}, 400)
+        proof_token = body.get("proof_token", "agent-task-token-proof")
+        if cert_thumbprint_sha256_pem(cert_pem) != agent.get("cert_thumbprint"):
+            return self.send_json({"error": "certificate_binding_failed"}, 401)
+        if not verify_proof(cert_pem, proof_sig, proof_token, "POST", "/agent/task/token"):
+            return self.send_json({"error": "invalid_proof_signature"}, 401)
+        token = issue_jwt(subject=f"agent:{agent_id}", audience=INTERNAL_API_AUD, client_id="agent-task-runtime", scopes=task.get("requested_scopes", []), actor_type="agent", ttl_seconds=min(AGENT_TOKEN_TTL_SECONDS, 180), cnf_x5t=agent["cert_thumbprint"], extra_claims={"task_id": task_id, "agent_id": agent_id, "initiating_user": task.get("initiating_user"), "agent_mode": task.get("agent_mode"), "delegation_type": "agent_task", "allowed_tools": task.get("requested_tools", []), "environment": task.get("environment"), "gpu_quota": task.get("gpu_quota"), "approval_status": task.get("approval_status", "pending"), "requested_scopes": task.get("requested_scopes", [])})
+        audit("agent_task_token_issued", task_id=task_id, agent_id=agent_id, user=task.get("initiating_user"), scope=" ".join(task.get("requested_scopes", [])))
+        return self.send_json({"access_token": token, "token_type": "Bearer", "expires_in": min(AGENT_TOKEN_TTL_SECONDS, 180)})
     def agent_disable(self, body, status):
         agents = db(AGENT_DB, {})
         aid = body.get("agent_id")
