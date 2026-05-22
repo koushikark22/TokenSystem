@@ -12,6 +12,9 @@ from token_utils import (
 )
 from device_attestation import validate_attestation
 import os
+from tool_registry import get_tool, scopes_for_tools, highest_risk, approval_required_for_tools
+from agent_tasks import approve_task, create_task, get_task
+
 
 REFRESH_DB = STATE_DIR / "refresh_tokens.json"
 AGENT_DB = STATE_DIR / "agents.json"
@@ -84,6 +87,9 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/agent/disable": return self.agent_disable(body, "disabled")
             if p == "/agent/enable": return self.agent_disable(body, "active")
             if p == "/agent/token": return self.agent_token(body)
+            if p == "/agent/task/create": return self.agent_task_create(body)
+            if p == "/agent/task/approve": return self.agent_task_approve(body)
+            if p == "/agent/task/token": return self.agent_task_token(body)
             if p == "/agent/rotate-cert": return self.agent_rotate_cert(body)
             if p == "/introspect": return self.introspect(body)
             if p == "/revoke": return self.revoke(body)
@@ -236,6 +242,102 @@ class Handler(BaseHTTPRequestHandler):
             token = issue_jwt(subject=f"agent:{agent_id}", audience=INTERNAL_API_AUD, client_id="agent-runtime", scopes=requested, actor_type="agent", ttl_seconds=AGENT_TOKEN_TTL_SECONDS, cnf_x5t=agent["cert_thumbprint"], extra_claims={"agent_id": agent_id, "agent_owner": agent["agent_owner"], "environment": agent["environment"], "initiating_user": body.get("initiating_user", "developer01"), "delegation_type":"user_delegated", "gpu_quota_max_jobs": agent["gpu_quota_max_jobs"]})
             audit("agent_token_issued", actor_type="agent", agent_id=agent_id, user=body.get("initiating_user"), scope=" ".join(requested), reason="ok", correlation_id=str(uuid.uuid4())); return self.send_json({"access_token": token, "token_type":"Bearer", "expires_in": AGENT_TOKEN_TTL_SECONDS})
         except Exception as e: audit("agent_token_failed", agent_id=agent_id, reason=str(e)); return self.send_json({"error": str(e)}, 401)
+    def agent_task_create(self, body):
+        agent_id = body.get("agent_id")
+        agents = db(AGENT_DB, {})
+        agent = agents.get(agent_id)
+        if not agent:
+            return self.send_json({"error": "agent_not_found"}, 404)
+        if agent.get("status") != "active":
+            return self.send_json({"error": "agent_not_active"}, 403)
+
+        requested_tools = body.get("requested_tools", [])
+        unknown_tools = [name for name in requested_tools if not get_tool(name)]
+        if unknown_tools:
+            return self.send_json({"error": "unknown_tools", "tools": unknown_tools}, 400)
+
+        agent_mode = body.get("agent_mode", "manual")
+        environment = body.get("environment", agent.get("environment", "dev"))
+        requested_scopes = scopes_for_tools(requested_tools)
+        risk_level = highest_risk(requested_tools)
+        approval_required = approval_required_for_tools(requested_tools, agent_mode=agent_mode, environment=environment)
+
+        task = create_task({
+            "agent_id": agent_id,
+            "initiating_user": body.get("initiating_user"),
+            "agent_mode": agent_mode,
+            "goal": body.get("goal", ""),
+            "requested_tools": requested_tools,
+            "requested_scopes": requested_scopes,
+            "environment": environment,
+            "risk_level": risk_level,
+            "approval_required": approval_required,
+            "approval_status": "pending" if approval_required else "not_required",
+            "status": "pending_approval" if approval_required else "approved",
+            "policy_id": body.get("policy_id", "jwt-demo-policy"),
+            "policy_version": body.get("policy_version", "2026.05"),
+            "decision_id": body.get("decision_id", f"dec-{uuid.uuid4()}"),
+            "reason": body.get("reason", "agent_task_created"),
+        })
+
+        audit("agent_task_created", agent_id=agent_id, task_id=task["task_id"], user=task.get("initiating_user"), risk_level=risk_level, approval_required=approval_required)
+        return self.send_json(task)
+
+    def agent_task_approve(self, body):
+        task_id = body.get("task_id")
+        if not task_id:
+            return self.send_json({"error": "task_id_required"}, 400)
+        task = approve_task(task_id, reason=body.get("reason", "approved"))
+        if not task:
+            return self.send_json({"error": "task_not_found"}, 404)
+        audit("agent_task_approved", agent_id=task.get("agent_id"), task_id=task_id, user=body.get("approved_by", task.get("initiating_user")), reason=task.get("reason", "approved"))
+        return self.send_json(task)
+
+    def agent_task_token(self, body):
+        task_id = body.get("task_id")
+        if not task_id:
+            return self.send_json({"error": "task_id_required"}, 400)
+        task = get_task(task_id)
+        if not task:
+            return self.send_json({"error": "task_not_found"}, 404)
+
+        agents = db(AGENT_DB, {})
+        agent = agents.get(task.get("agent_id"))
+        if not agent:
+            return self.send_json({"error": "agent_not_found"}, 404)
+        if agent.get("status") != "active":
+            return self.send_json({"error": "agent_not_active"}, 403)
+
+        if task.get("approval_required") and task.get("approval_status") != "approved":
+            return self.send_json({"error": "approval_required", "approval_status": task.get("approval_status")}, 403)
+
+        token = issue_jwt(
+            subject=f"agent:{task['agent_id']}",
+            audience=INTERNAL_API_AUD,
+            client_id="agent-runtime",
+            scopes=task.get("requested_scopes", []),
+            actor_type="agent",
+            ttl_seconds=min(AGENT_TOKEN_TTL_SECONDS, 300),
+            cnf_x5t=agent.get("cert_thumbprint"),
+            extra_claims={
+                "task_id": task["task_id"],
+                "agent_id": task["agent_id"],
+                "initiating_user": task.get("initiating_user"),
+                "agent_mode": task.get("agent_mode"),
+                "allowed_tools": task.get("requested_tools", []),
+                "environment": task.get("environment"),
+                "approval_required": task.get("approval_required"),
+                "approval_status": task.get("approval_status"),
+                "policy_id": task.get("policy_id"),
+                "policy_version": task.get("policy_version"),
+                "decision_id": task.get("decision_id"),
+                "risk_level": task.get("risk_level"),
+                "reason": task.get("reason"),
+            },
+        )
+        audit("agent_task_token_issued", task_id=task["task_id"], agent_id=task["agent_id"], user=task.get("initiating_user"), scope=" ".join(task.get("requested_scopes", [])))
+        return self.send_json({"access_token": token, "token_type": "Bearer", "expires_in": min(AGENT_TOKEN_TTL_SECONDS, 300)})
+
     def agent_disable(self, body, status):
         agents = db(AGENT_DB, {})
         aid = body.get("agent_id")
