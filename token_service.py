@@ -238,6 +238,10 @@ class Handler(BaseHTTPRequestHandler):
             audit("agent_token_issued", actor_type="agent", agent_id=agent_id, user=body.get("initiating_user"), scope=" ".join(requested), reason="ok", correlation_id=str(uuid.uuid4())); return self.send_json({"access_token": token, "token_type":"Bearer", "expires_in": AGENT_TOKEN_TTL_SECONDS})
         except Exception as e: audit("agent_token_failed", agent_id=agent_id, reason=str(e)); return self.send_json({"error": str(e)}, 401)
     def agent_task_create(self, body):
+        try:
+            from tool_registry import resolve_requested_scopes
+        except Exception:
+            resolve_requested_scopes = None
         agents = db(AGENT_DB, {})
         agent_id = body.get("agent_id")
         agent = agents.get(agent_id)
@@ -248,10 +252,13 @@ class Handler(BaseHTTPRequestHandler):
 
         agent_mode = body.get("agent_mode")
         initiating_user = body.get("initiating_user")
-        requested_scopes = body.get("requested_scopes", [])
         requested_tools = body.get("requested_tools", [])
         environment = body.get("environment", agent.get("environment"))
-        gpu_quota = body.get("gpu_quota", 1)
+        try:
+            gpu_quota = int(body.get("gpu_quota", 1))
+        except (TypeError, ValueError):
+            audit("agent_task_denied", decision="deny", agent_id=agent_id, user=initiating_user, reason="invalid_gpu_quota", gpu_quota=body.get("gpu_quota"))
+            return self.send_json({"error": "invalid_gpu_quota"}, 400)
 
         if agent_mode not in ["manual", "autonomous"]:
             audit("agent_task_denied", decision="deny", agent_id=agent_id, reason="invalid_agent_mode", agent_mode=agent_mode)
@@ -259,6 +266,10 @@ class Handler(BaseHTTPRequestHandler):
         if not initiating_user:
             audit("agent_task_denied", decision="deny", agent_id=agent_id, reason="initiating_user_missing")
             return self.send_json({"error": "initiating_user_missing"}, 400)
+        if resolve_requested_scopes:
+            requested_scopes = resolve_requested_scopes(requested_tools)
+        else:
+            requested_scopes = []
         if not set(requested_scopes).issubset(set(agent.get("allowed_scopes", []))):
             audit("agent_task_denied", decision="deny", agent_id=agent_id, user=initiating_user, reason="requested_scopes_exceed_agent_policy", requested_scopes=requested_scopes)
             return self.send_json({"error": "requested_scopes_exceed_agent_policy"}, 403)
