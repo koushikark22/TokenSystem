@@ -17,7 +17,6 @@ REFRESH_DB = STATE_DIR / "refresh_tokens.json"
 AGENT_DB = STATE_DIR / "agents.json"
 AUDIT_DB = STATE_DIR / "audit.json"
 DEVICE_CODE_DB = STATE_DIR / "device_codes.json"
-AGENT_TASK_DB = STATE_DIR / "agent_tasks.json"
 USER_ID = "developer01"; CLIENT_ID = "linux-devctl"; DEVICE_ID = "linux-laptop-001"
 DEFAULT_DEVICE_SCOPES = ["obo.exchange", "build.read", "gpu.job.read", "gpu.job.submit"]
 
@@ -240,6 +239,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e: audit("agent_token_failed", agent_id=agent_id, reason=str(e)); return self.send_json({"error": str(e)}, 401)
     def agent_task_create(self, body):
         import tool_registry
+        from agent_tasks import persist_task
         agents = db(AGENT_DB, {})
         agent_id = body.get("agent_id")
         agent = agents.get(agent_id)
@@ -307,9 +307,7 @@ class Handler(BaseHTTPRequestHandler):
             "status": "created",
             "created": now(),
         }
-        tasks = db(AGENT_TASK_DB, {})
-        tasks[task["task_id"]] = task
-        save(AGENT_TASK_DB, tasks)
+        persist_task(task)
         audit("agent_task_created", agent_id=agent_id, user=initiating_user, agent_mode=agent_mode, requested_scopes=requested_scopes, requested_tools=requested_tools, environment=environment, gpu_quota=gpu_quota)
         return self.send_json(task, 201)
     def agent_disable(self, body, status):
