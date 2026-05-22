@@ -51,7 +51,7 @@
     const task = s.created_task || {};
     const approvedTask = s.approved_task || {};
     const token = s.task_token || {};
-    const claims = s.introspect || {};
+    const claims = s.token_claims || {};
 
     const preApprovalPass = s.pre_approval_token_body?.error === "approval_required";
     const selfApprovalPass = s.self_approval_body?.error === "self_approval_not_allowed";

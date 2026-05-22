@@ -428,6 +428,7 @@ def run_agentic_task_demo(return_summary=True):
     introspect_rsp = requests.post(f"{TOKEN_URL}/introspect", json={"token": task_token.get("access_token"), "audience": INTERNAL_API_AUD})
     introspect_rsp.raise_for_status()
     introspect = introspect_rsp.json()
+    decoded_claims = _decode_jwt_claims_unverified(task_token.get("access_token", ""))
 
     summary = {
         "agent_registration": register_rsp.json(),
@@ -439,6 +440,20 @@ def run_agentic_task_demo(return_summary=True):
         "approval_status": approval_rsp.status_code,
         "approved_task": approved_task,
         "task_token": token_output(task_token),
+        "token_claims": {
+            "sub": decoded_claims.get("sub"),
+            "actor_type": decoded_claims.get("actor_type"),
+            "agent_id": decoded_claims.get("agent_id"),
+            "initiating_user": decoded_claims.get("initiating_user"),
+            "delegation_type": decoded_claims.get("delegation_type"),
+            "task_id": decoded_claims.get("task_id"),
+            "allowed_tools": decoded_claims.get("allowed_tools"),
+            "environment": decoded_claims.get("environment"),
+            "gpu_quota": decoded_claims.get("gpu_quota"),
+            "approval_status": decoded_claims.get("approval_status"),
+            "scope": decoded_claims.get("scope"),
+            "cnf_x5t_s256": (decoded_claims.get("cnf") or {}).get("x5t#S256"),
+        },
         "introspect": {
             "active": introspect.get("active"),
             "sub": introspect.get("sub"),
