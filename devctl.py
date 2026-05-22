@@ -381,7 +381,7 @@ def demo_failure_scope_denied(args):
     pp({"error": "unexpected_success", "response": r.json()})
 
 
-def demo_agentic_task(args):
+def run_agentic_task_demo(return_summary=True):
     agent_id = "agent-gpu-planner-dev"
     register_agent_payload = {
         "agent_id": agent_id,
@@ -390,7 +390,8 @@ def demo_agentic_task(args):
         "allowed_scopes": ["gpu.job.submit", "gpu.job.read", "pr.comment"],
         "gpu_quota_max_jobs": 1,
     }
-    requests.post(f"{TOKEN_URL}/agent/register", json=register_agent_payload).raise_for_status()
+    register_rsp = requests.post(f"{TOKEN_URL}/agent/register", json=register_agent_payload)
+    register_rsp.raise_for_status()
 
     created_task_rsp = requests.post(
         f"{TOKEN_URL}/agent/task/create",
@@ -407,46 +408,30 @@ def demo_agentic_task(args):
     created_task = created_task_rsp.json()
     task_id = created_task.get("task_id")
 
-    pre_approval_token_rsp = requests.post(
-        f"{TOKEN_URL}/agent/task/token",
-        json={"task_id": task_id, "proof_token": "agent-task-token-proof"},
-        headers={
-            "X-Client-Cert": encode_cert_header(cert_to_pem_string(AGENT_CERT_PATH)),
-            "X-Proof-Signature": sign_proof(AGENT_KEY_PATH, "agent-task-token-proof", "POST", "/agent/task/token"),
-        },
-    )
+    token_headers = {
+        "X-Client-Cert": encode_cert_header(cert_to_pem_string(AGENT_CERT_PATH)),
+        "X-Proof-Signature": sign_proof(AGENT_KEY_PATH, "agent-task-token-proof", "POST", "/agent/task/token"),
+    }
 
-    self_approval_rsp = requests.post(
-        f"{TOKEN_URL}/agent/task/approve",
-        json={"task_id": task_id, "approved_by": "developer01"},
-    )
+    pre_approval_token_rsp = requests.post(f"{TOKEN_URL}/agent/task/token", json={"task_id": task_id, "proof_token": "agent-task-token-proof"}, headers=token_headers)
 
-    approval_rsp = requests.post(
-        f"{TOKEN_URL}/agent/task/approve",
-        json={"task_id": task_id, "approved_by": "platform-security"},
-    )
+    self_approval_rsp = requests.post(f"{TOKEN_URL}/agent/task/approve", json={"task_id": task_id, "approved_by": "developer01"})
+
+    approval_rsp = requests.post(f"{TOKEN_URL}/agent/task/approve", json={"task_id": task_id, "approved_by": "platform-security"})
     approval_rsp.raise_for_status()
     approved_task = approval_rsp.json()
 
-    task_token_rsp = requests.post(
-        f"{TOKEN_URL}/agent/task/token",
-        json={"task_id": task_id, "proof_token": "agent-task-token-proof"},
-        headers={
-            "X-Client-Cert": encode_cert_header(cert_to_pem_string(AGENT_CERT_PATH)),
-            "X-Proof-Signature": sign_proof(AGENT_KEY_PATH, "agent-task-token-proof", "POST", "/agent/task/token"),
-        },
-    )
+    task_token_rsp = requests.post(f"{TOKEN_URL}/agent/task/token", json={"task_id": task_id, "proof_token": "agent-task-token-proof"}, headers=token_headers)
     task_token_rsp.raise_for_status()
     task_token = task_token_rsp.json()
 
-    introspect_rsp = requests.post(
-        f"{TOKEN_URL}/introspect",
-        json={"token": task_token.get("access_token"), "audience": INTERNAL_API_AUD},
-    )
+    introspect_rsp = requests.post(f"{TOKEN_URL}/introspect", json={"token": task_token.get("access_token"), "audience": INTERNAL_API_AUD})
     introspect_rsp.raise_for_status()
     introspect = introspect_rsp.json()
+    decoded_claims = _decode_jwt_claims_unverified(task_token.get("access_token", ""))
 
     summary = {
+        "agent_registration": register_rsp.json(),
         "created_task": created_task,
         "pre_approval_token_status": pre_approval_token_rsp.status_code,
         "pre_approval_token_body": pre_approval_token_rsp.json(),
@@ -455,6 +440,20 @@ def demo_agentic_task(args):
         "approval_status": approval_rsp.status_code,
         "approved_task": approved_task,
         "task_token": token_output(task_token),
+        "token_claims": {
+            "sub": decoded_claims.get("sub"),
+            "actor_type": decoded_claims.get("actor_type"),
+            "agent_id": decoded_claims.get("agent_id"),
+            "initiating_user": decoded_claims.get("initiating_user"),
+            "delegation_type": decoded_claims.get("delegation_type"),
+            "task_id": decoded_claims.get("task_id"),
+            "allowed_tools": decoded_claims.get("allowed_tools"),
+            "environment": decoded_claims.get("environment"),
+            "gpu_quota": decoded_claims.get("gpu_quota"),
+            "approval_status": decoded_claims.get("approval_status"),
+            "scope": decoded_claims.get("scope"),
+            "cnf_x5t_s256": (decoded_claims.get("cnf") or {}).get("x5t#S256"),
+        },
         "introspect": {
             "active": introspect.get("active"),
             "sub": introspect.get("sub"),
@@ -468,9 +467,14 @@ def demo_agentic_task(args):
             "gpu_quota": introspect.get("gpu_quota"),
             "approval_status": introspect.get("approval_status"),
             "scope": introspect.get("scope"),
+            "cnf_x5t_s256": (introspect.get("cnf") or {}).get("x5t#S256"),
         },
     }
-    pp(summary)
+    return summary if return_summary else None
+
+
+def demo_agentic_task(args):
+    pp(run_agentic_task_demo(return_summary=True))
 
 def main():
     p=argparse.ArgumentParser(); sub=p.add_subparsers(dest="cmd", required=True)
