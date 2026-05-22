@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Governed Agent Task Lifecycle</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #f4f6f8; color: #13212f; }
+    .wrap { max-width: 1100px; margin: 24px auto; padding: 0 16px; }
+    h1 { margin-bottom: 8px; }
+    .toolbar { display: flex; gap: 10px; margin: 16px 0 20px; }
+    button { border: 0; padding: 10px 14px; border-radius: 8px; background: #1b63d8; color: #fff; cursor: pointer; }
+    button.secondary { background: #556070; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+    .card { background: #fff; border-radius: 10px; padding: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    .card h3 { margin-top: 0; font-size: 16px; }
+    .kv { margin: 6px 0; font-size: 14px; }
+    .k { font-weight: 700; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+    .pass { background: #dff4e4; color: #145c2b; }
+    .fail { background: #ffe1e1; color: #7a1d1d; }
+    code { background:#eef2f6; padding:1px 5px; border-radius:4px; }
+    pre { background:#eef2f6; padding:8px; border-radius:8px; overflow:auto; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Governed Agent Task Lifecycle</h1>
+  <div class="toolbar">
+    <button id="runBtn">Run Full Agentic Demo</button>
+    <button id="resetBtn" class="secondary">Reset Demo State</button>
+    <button id="auditBtn" class="secondary">Refresh Audit</button>
+  </div>
+
+  <div id="badges" class="card"></div>
+  <div id="steps" class="grid"></div>
+  <div class="card">
+    <h3>Step 8: Audit Summary</h3>
+    <pre id="audit">[]</pre>
+  </div>
+</div>
+<script>
+  let current = null;
+  const el = (id) => document.getElementById(id);
+
+  function kv(k,v){ return `<div class="kv"><span class="k">${k}:</span> ${v ?? ""}</div>`; }
+  function safe(v){ return (v===undefined||v===null) ? "" : JSON.stringify(v); }
+
+  function render(){
+    const s = current?.summary || {};
+    const task = s.created_task || {};
+    const approvedTask = s.approved_task || {};
+    const token = s.task_token || {};
+    const claims = s.introspect || {};
+
+    const preApprovalPass = s.pre_approval_token_body?.error === "approval_required";
+    const selfApprovalPass = s.self_approval_body?.error === "self_approval_not_allowed";
+    const approvalPass = approvedTask.approval_status === "approved";
+    const tokenPass = token.access_token_preview;
+    const delegationPass = claims.delegation_type === "agent_task";
+
+    el("badges").innerHTML = [
+      ["approval required", task.approval_required === true],
+      ["pre-approval token denied", preApprovalPass],
+      ["self-approval denied", selfApprovalPass],
+      ["separate approval succeeded", approvalPass],
+      ["task token issued", !!tokenPass],
+      ["token contains agent_task delegation", delegationPass],
+    ].map(([label,pass]) => `<div class="kv">${label}: <span class="badge ${pass?"pass":"fail"}">${pass?"PASS":"FAIL"}</span></div>`).join("");
+
+    el("steps").innerHTML = `
+      <div class="card"><h3>Step 1: Agent Registration</h3>
+        ${kv("agent_id", task.agent_id)}${kv("agent_owner", s.agent_registration?.agent_owner)}${kv("environment", s.agent_registration?.environment)}
+        ${kv("allowed_scopes", safe(s.agent_registration?.allowed_scopes))}${kv("status", s.agent_registration?.status)}
+      </div>
+      <div class="card"><h3>Step 2: Create Agent Task</h3>
+        ${kv("initiating_user", task.initiating_user)}${kv("agent_mode", task.agent_mode)}${kv("requested_tools", safe(task.requested_tools))}
+        ${kv("requested_scopes", safe(task.requested_scopes))}${kv("gpu_quota", task.gpu_quota)}${kv("risk_level", task.risk_level)}
+        ${kv("approval_required", task.approval_required)}${kv("approval_status", task.approval_status)}${kv("task_id", task.task_id)}
+      </div>
+      <div class="card"><h3>Step 3: Pre-Approval Token Attempt</h3>
+        ${kv("status code", s.pre_approval_token_status)}${kv("expected result", "approval_required")}
+      </div>
+      <div class="card"><h3>Step 4: Self-Approval Attempt</h3>
+        ${kv("approved_by", "developer01")}${kv("expected result", "self_approval_not_allowed")}${kv("status code", s.self_approval_status)}
+      </div>
+      <div class="card"><h3>Step 5: Platform Security Approval</h3>
+        ${kv("approved_by", "platform-security")}${kv("status", approvedTask.approval_status)}
+      </div>
+      <div class="card"><h3>Step 6: Task Token Issuance</h3>
+        ${kv("token_type", token.token_type)}${kv("expires_in", token.expires_in)}${kv("access_token_preview", token.access_token_preview)}
+      </div>
+      <div class="card"><h3>Step 7: Token Claims</h3>
+        ${kv("sub", claims.sub)}${kv("actor_type", claims.actor_type)}${kv("agent_id", claims.agent_id)}${kv("initiating_user", claims.initiating_user)}
+        ${kv("delegation_type", claims.delegation_type)}${kv("task_id", claims.task_id)}${kv("allowed_tools", safe(claims.allowed_tools))}
+        ${kv("environment", claims.environment)}${kv("gpu_quota", claims.gpu_quota)}${kv("approval_status", claims.approval_status)}
+        ${kv("scope", claims.scope)}${kv("cnf.x5t#S256", claims.cnf_x5t_s256)}
+      </div>`;
+
+    el("audit").textContent = JSON.stringify(current?.audit || [], null, 2);
+  }
+
+  async function runDemo(){
+    const rsp = await fetch('/api/run-demo', {method:'POST'});
+    current = await rsp.json();
+    render();
+  }
+  async function resetDemo(){ await fetch('/api/reset', {method:'POST'}); current = null; render(); }
+  async function refreshAudit(){ const rsp = await fetch('/api/audit'); const data = await rsp.json(); current = current || {}; current.audit = data.events; render(); }
+
+  el('runBtn').onclick = runDemo;
+  el('resetBtn').onclick = resetDemo;
+  el('auditBtn').onclick = refreshAudit;
+  refreshAudit();
+</script>
+</body>
+</html>
