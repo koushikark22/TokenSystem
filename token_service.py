@@ -296,6 +296,24 @@ class Handler(BaseHTTPRequestHandler):
             if environment != "dev" or gpu_quota > 1:
                 audit("agent_task_denied", decision="deny", agent_id=agent_id, user=initiating_user, reason="autonomous_gpu_policy_denied", environment=environment, gpu_quota=gpu_quota)
                 return self.send_json({"error": "autonomous_gpu_policy_denied"}, 403)
+        has_deploy_prod = "deploy.prod" in requested_tools
+        has_gpu_submit_dev = "gpu.submit.dev" in requested_tools
+        if has_deploy_prod:
+            risk_level = "high"
+        elif has_gpu_submit_dev:
+            risk_level = "medium"
+        else:
+            risk_level = "low"
+        approval_required = False
+        if has_deploy_prod:
+            approval_required = True
+        elif has_gpu_submit_dev:
+            if agent_mode == "manual":
+                approval_required = True
+            else:
+                approval_required = not (environment == "dev" and gpu_quota <= 1)
+        approval_status = "pending" if approval_required else "not_required"
+        task_status = "pending_approval" if approval_required else "approved"
 
         task = {
             "task_id": f"task-{uuid.uuid4()}",
@@ -306,7 +324,10 @@ class Handler(BaseHTTPRequestHandler):
             "requested_tools": requested_tools,
             "environment": environment,
             "gpu_quota": gpu_quota,
-            "status": "created",
+            "approval_required": approval_required,
+            "approval_status": approval_status,
+            "risk_level": risk_level,
+            "status": task_status,
             "created": now(),
         }
         persist_task(task)
@@ -337,23 +358,30 @@ class Handler(BaseHTTPRequestHandler):
         tasks = load_tasks()
         task = tasks.get(task_id)
         if not task:
+            audit("agent_task_token_failed", task_id=task_id, reason="task_not_found")
             return self.send_json({"error": "task_not_found"}, 404)
         agent_id = task.get("agent_id")
         agent = db(AGENT_DB, {}).get(agent_id)
         if not agent:
+            audit("agent_task_token_failed", task_id=task_id, agent_id=agent_id, reason="agent_not_found")
             return self.send_json({"error": "agent_not_found"}, 404)
         if agent.get("status") != "active":
+            audit("agent_task_token_failed", task_id=task_id, agent_id=agent_id, reason="agent_not_active")
             return self.send_json({"error": "agent_not_active"}, 403)
-        if task.get("approval_required", True) and task.get("approval_status") != "approved":
+        if task.get("approval_required") and task.get("approval_status") != "approved":
+            audit("agent_task_token_failed", task_id=task_id, agent_id=agent_id, reason="approval_required")
             return self.send_json({"error": "approval_required"}, 403)
         cert_pem = decode_cert_header(self.headers.get("X-Client-Cert", ""))
         proof_sig = self.headers.get("X-Proof-Signature")
         if not cert_pem or not proof_sig:
+            audit("agent_task_token_failed", task_id=task_id, agent_id=agent_id, reason="client_certificate_and_proof_required")
             return self.send_json({"error": "client_certificate_and_proof_required"}, 400)
         proof_token = body.get("proof_token", "agent-task-token-proof")
         if cert_thumbprint_sha256_pem(cert_pem) != agent.get("cert_thumbprint"):
+            audit("agent_task_token_failed", task_id=task_id, agent_id=agent_id, reason="certificate_binding_failed")
             return self.send_json({"error": "certificate_binding_failed"}, 401)
         if not verify_proof(cert_pem, proof_sig, proof_token, "POST", "/agent/task/token"):
+            audit("agent_task_token_failed", task_id=task_id, agent_id=agent_id, reason="invalid_proof_signature")
             return self.send_json({"error": "invalid_proof_signature"}, 401)
         token = issue_jwt(subject=f"agent:{agent_id}", audience=INTERNAL_API_AUD, client_id="agent-task-runtime", scopes=task.get("requested_scopes", []), actor_type="agent", ttl_seconds=min(AGENT_TOKEN_TTL_SECONDS, 180), cnf_x5t=agent["cert_thumbprint"], extra_claims={"task_id": task_id, "agent_id": agent_id, "initiating_user": task.get("initiating_user"), "agent_mode": task.get("agent_mode"), "delegation_type": "agent_task", "allowed_tools": task.get("requested_tools", []), "environment": task.get("environment"), "gpu_quota": task.get("gpu_quota"), "approval_status": task.get("approval_status", "pending"), "requested_scopes": task.get("requested_scopes", [])})
         audit("agent_task_token_issued", task_id=task_id, agent_id=agent_id, user=task.get("initiating_user"), scope=" ".join(task.get("requested_scopes", [])))
