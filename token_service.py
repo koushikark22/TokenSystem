@@ -84,6 +84,7 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/agent/disable": return self.agent_disable(body, "disabled")
             if p == "/agent/enable": return self.agent_disable(body, "active")
             if p == "/agent/token": return self.agent_token(body)
+            if p == "/agent/task/create": return self.agent_task_create(body)
             if p == "/agent/rotate-cert": return self.agent_rotate_cert(body)
             if p == "/introspect": return self.introspect(body)
             if p == "/revoke": return self.revoke(body)
@@ -236,6 +237,77 @@ class Handler(BaseHTTPRequestHandler):
             token = issue_jwt(subject=f"agent:{agent_id}", audience=INTERNAL_API_AUD, client_id="agent-runtime", scopes=requested, actor_type="agent", ttl_seconds=AGENT_TOKEN_TTL_SECONDS, cnf_x5t=agent["cert_thumbprint"], extra_claims={"agent_id": agent_id, "agent_owner": agent["agent_owner"], "environment": agent["environment"], "initiating_user": body.get("initiating_user", "developer01"), "delegation_type":"user_delegated", "gpu_quota_max_jobs": agent["gpu_quota_max_jobs"]})
             audit("agent_token_issued", actor_type="agent", agent_id=agent_id, user=body.get("initiating_user"), scope=" ".join(requested), reason="ok", correlation_id=str(uuid.uuid4())); return self.send_json({"access_token": token, "token_type":"Bearer", "expires_in": AGENT_TOKEN_TTL_SECONDS})
         except Exception as e: audit("agent_token_failed", agent_id=agent_id, reason=str(e)); return self.send_json({"error": str(e)}, 401)
+    def agent_task_create(self, body):
+        import tool_registry
+        agents = db(AGENT_DB, {})
+        agent_id = body.get("agent_id")
+        agent = agents.get(agent_id)
+        if not agent:
+            return self.send_json({"error": "agent_not_found"}, 404)
+        if agent.get("status") != "active":
+            return self.send_json({"error": "agent_not_active"}, 403)
+
+        agent_mode = body.get("agent_mode")
+        initiating_user = body.get("initiating_user")
+        requested_tools = body.get("requested_tools", [])
+        environment = body.get("environment", agent.get("environment"))
+        if not requested_tools:
+            audit("agent_task_denied", decision="deny", agent_id=agent_id, user=initiating_user, reason="requested_tools_required")
+            return self.send_json({"error": "requested_tools_required"}, 400)
+        try:
+            gpu_quota = int(body.get("gpu_quota", 1))
+        except (TypeError, ValueError):
+            audit("agent_task_denied", decision="deny", agent_id=agent_id, user=initiating_user, reason="invalid_gpu_quota", gpu_quota=body.get("gpu_quota"))
+            return self.send_json({"error": "invalid_gpu_quota"}, 400)
+
+        if agent_mode not in ["manual", "autonomous"]:
+            audit("agent_task_denied", decision="deny", agent_id=agent_id, reason="invalid_agent_mode", agent_mode=agent_mode)
+            return self.send_json({"error": "invalid_agent_mode"}, 400)
+        if not initiating_user:
+            audit("agent_task_denied", decision="deny", agent_id=agent_id, reason="initiating_user_missing")
+            return self.send_json({"error": "initiating_user_missing"}, 400)
+        try:
+            scope_resolution = tool_registry.scopes_for_tools(requested_tools)
+            if isinstance(scope_resolution, tuple) and len(scope_resolution) == 2:
+                requested_scopes, unknown_tools = scope_resolution
+                if unknown_tools:
+                    audit("agent_task_denied", decision="deny", agent_id=agent_id, user=initiating_user, reason="unknown_tools", unknown_tools=unknown_tools)
+                    return self.send_json({"error": "unknown_tools"}, 400)
+            elif isinstance(scope_resolution, dict):
+                requested_scopes = scope_resolution.get("scopes", [])
+                unknown_tools = scope_resolution.get("unknown_tools", [])
+                if unknown_tools:
+                    audit("agent_task_denied", decision="deny", agent_id=agent_id, user=initiating_user, reason="unknown_tools", unknown_tools=unknown_tools)
+                    return self.send_json({"error": "unknown_tools"}, 400)
+            else:
+                requested_scopes = scope_resolution
+            if not isinstance(requested_scopes, list):
+                raise ValueError("invalid_scope_resolution")
+        except Exception:
+            audit("agent_task_denied", decision="deny", agent_id=agent_id, user=initiating_user, reason="unknown_tools", requested_tools=requested_tools)
+            return self.send_json({"error": "unknown_tools"}, 400)
+        if not set(requested_scopes).issubset(set(agent.get("allowed_scopes", []))):
+            audit("agent_task_denied", decision="deny", agent_id=agent_id, user=initiating_user, reason="requested_scopes_exceed_agent_policy", requested_scopes=requested_scopes)
+            return self.send_json({"error": "requested_scopes_exceed_agent_policy"}, 403)
+        if "gpu.submit.dev" in requested_tools and agent_mode == "autonomous":
+            if environment != "dev" or gpu_quota > 1:
+                audit("agent_task_denied", decision="deny", agent_id=agent_id, user=initiating_user, reason="autonomous_gpu_policy_denied", environment=environment, gpu_quota=gpu_quota)
+                return self.send_json({"error": "autonomous_gpu_policy_denied"}, 403)
+
+        task = {
+            "task_id": f"task-{uuid.uuid4()}",
+            "agent_id": agent_id,
+            "agent_mode": agent_mode,
+            "initiating_user": initiating_user,
+            "requested_scopes": requested_scopes,
+            "requested_tools": requested_tools,
+            "environment": environment,
+            "gpu_quota": gpu_quota,
+            "status": "created",
+            "created": now(),
+        }
+        audit("agent_task_created", agent_id=agent_id, user=initiating_user, agent_mode=agent_mode, requested_scopes=requested_scopes, requested_tools=requested_tools, environment=environment, gpu_quota=gpu_quota)
+        return self.send_json(task, 201)
     def agent_disable(self, body, status):
         agents = db(AGENT_DB, {})
         aid = body.get("agent_id")
